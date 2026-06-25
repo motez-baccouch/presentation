@@ -14,7 +14,14 @@ const COLUMNS: { status: SummaryStatus; color: string; ink: string }[] = [
   { status: "Released", color: "#f4691e", ink: "#ffffff" },
 ];
 
-export async function GET() {
+function base(req: Request): string {
+  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
+  const url = new URL(req.url);
+  return `${url.protocol}//${url.host}`;
+}
+
+export async function GET(req: Request) {
+  const origin = base(req);
   const deck = await getPresentation();
   const items = naiveCategorize(collectUpdates(deck.slides));
 
@@ -26,8 +33,9 @@ export async function GET() {
           height: "630px",
           display: "flex",
           flexDirection: "column",
-          padding: "52px",
-          backgroundColor: "#fff8ea",
+          padding: "48px",
+          background:
+            "linear-gradient(135deg, #fff8ea 0%, #fdeccb 55%, #fbe0c0 100%)",
           fontFamily: "sans-serif",
         }}
       >
@@ -37,13 +45,13 @@ export async function GET() {
             display: "flex",
             justifyContent: "space-between",
             alignItems: "flex-start",
-            marginBottom: "28px",
+            marginBottom: "26px",
           }}
         >
           <div style={{ display: "flex", flexDirection: "column" }}>
             <div
               style={{
-                fontSize: "20px",
+                fontSize: "19px",
                 fontWeight: 700,
                 letterSpacing: "3px",
                 color: "#f4691e",
@@ -51,21 +59,18 @@ export async function GET() {
             >
               {formatToday().toUpperCase()}
             </div>
-            <div style={{ fontSize: "54px", fontWeight: 800, color: "#1c1407" }}>
+            <div style={{ fontSize: "52px", fontWeight: 800, color: "#1c1407" }}>
               This Week at Sigma
             </div>
           </div>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              fontSize: "26px",
-              fontWeight: 800,
-              color: "#f4691e",
-            }}
-          >
-            Σ Sigma Lending
-          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`${origin}/brand/logo.svg`}
+            width={176}
+            height={81}
+            alt="Sigma Lending"
+            style={{ marginTop: "6px" }}
+          />
         </div>
 
         {/* columns */}
@@ -89,7 +94,7 @@ export async function GET() {
                 <div
                   style={{
                     display: "flex",
-                    padding: "14px 18px",
+                    padding: "13px 18px",
                     backgroundColor: col.color,
                     color: col.ink,
                     fontSize: "21px",
@@ -102,7 +107,7 @@ export async function GET() {
                   style={{
                     display: "flex",
                     flexDirection: "column",
-                    padding: "16px",
+                    padding: "15px",
                     gap: "12px",
                   }}
                 >
@@ -111,26 +116,32 @@ export async function GET() {
                     return (
                       <div
                         key={i}
-                        style={{ display: "flex", alignItems: "center", gap: "10px" }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "11px",
+                        }}
                       >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`${origin}${m?.avatar ?? "/avatars/team.png"}`}
+                          width={34}
+                          height={34}
+                          alt=""
+                          style={{
+                            borderRadius: "9999px",
+                            objectFit: "cover",
+                            border: `2px solid ${col.color}`,
+                          }}
+                        />
                         <div
                           style={{
                             display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: "26px",
-                            height: "26px",
-                            borderRadius: "999px",
-                            backgroundColor: col.color,
-                            color: "#ffffff",
-                            fontSize: "13px",
-                            fontWeight: 700,
-                            flexShrink: 0,
+                            fontSize: "16px",
+                            color: "#1c1407",
+                            lineHeight: 1.15,
                           }}
                         >
-                          {(m?.name ?? "?").charAt(0)}
-                        </div>
-                        <div style={{ display: "flex", fontSize: "16px", color: "#1c1407" }}>
                           {it.label}
                         </div>
                       </div>
