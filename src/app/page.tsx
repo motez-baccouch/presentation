@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { getPresentation } from "@/lib/db";
 import { SlideThumb } from "@/components/SlideThumb";
+import { LiveRefresh } from "@/components/LiveRefresh";
 import { getMember } from "@/lib/team";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +12,7 @@ export default async function Home() {
 
   return (
     <main className="flex-1">
+      <LiveRefresh />
       {/* Hero */}
       <section className="sigma-mesh relative overflow-hidden">
         <div className="mx-auto max-w-6xl px-6 pt-10 pb-20">

@@ -14,12 +14,18 @@ presentation.
 - 🎤 **Slack `/presentation <name> <text>`** → AI-formatted slide, auto-created/updated.
 - 🧮 **Slack `/presentation summary`** → AI **status board** (In Progress /
   In Review / Released) built from everyone's work, posted as a channel recap.
-- ✨ **Groq AI** for grammar/spelling fixes and turning free text into clean bullets.
+- ✨ **Groq AI** everywhere — fix grammar, and an **AI assist prompt** in the
+  editor (Improve / Shorten / Expand / Professional / or type your own
+  instruction) that rewrites the selected text.
+- 🪄 **`/presentation` form** in Slack — a popup with a teammate dropdown and
+  Delivered / In Review / In Progress boxes; AI files each under its status.
 - 🎨 **On-brand editor** — inline text editing, fonts/size/weight/colour, image
   **and video** upload + drag/resize, shapes, per-slide backgrounds, reorder,
-  add/duplicate/delete, plus a one-click "✨ AI summary" regenerate button.
-- ▶️ **Present mode** — fullscreen, animated transitions, bullet reveals, floating
-  brand orbs, keyboard navigation (`→`/`←`/`space`, `F` for fullscreen).
+  add/duplicate/delete, live "who's editing" presence, and one-click
+  "✨ AI summary" + "📣 Post to Slack".
+- ▶️ **Present mode** — fullscreen edge-to-edge, animated transitions + bullet
+  reveals, floating brand orbs, top progress bar, **auto-play loop**, keyboard
+  nav (`→`/`←`/`space`, `F`), and a **confetti** finish on the thank-you slide.
 - 🔒 **Shared-password access** for editing; viewing/presenting is open.
 - 🌱 Seeded with the real Sigma deck — branded title (individual avatars + logo +
   date), 7 teammates, AI status board, thank-you.

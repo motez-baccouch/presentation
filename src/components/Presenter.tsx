@@ -3,22 +3,40 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
-import { SlideData } from "@/lib/types";
+import { PresentationData, SlideData } from "@/lib/types";
 import { StageScaler } from "./stage/StageScaler";
 import { SlideView } from "./stage/SlideView";
+import { Confetti } from "./Confetti";
+import { useDeckVersion } from "./useDeckVersion";
 
 export function Presenter({
-  slides,
+  slides: initialSlides,
   startIndex = 0,
 }: {
   slides: SlideData[];
   startIndex?: number;
 }) {
+  const [slides, setSlides] = useState(initialSlides);
   const [index, setIndex] = useState(
-    Math.min(Math.max(startIndex, 0), Math.max(slides.length - 1, 0)),
+    Math.min(Math.max(startIndex, 0), Math.max(initialSlides.length - 1, 0)),
   );
+
+  // auto-refresh when the deck changes (e.g. a Slack update lands)
+  useDeckVersion(async () => {
+    try {
+      const deck: PresentationData = await (
+        await fetch("/api/presentation", { cache: "no-store" })
+      ).json();
+      setSlides(deck.slides);
+      setIndex((i) => Math.min(i, deck.slides.length - 1));
+    } catch {
+      /* ignore */
+    }
+  });
   const [dir, setDir] = useState(1);
   const [isFs, setIsFs] = useState(false);
+  const [auto, setAuto] = useState(false);
+  const [showHint, setShowHint] = useState(true);
 
   const go = useCallback(
     (next: number) => {
@@ -65,6 +83,25 @@ export function Presenter({
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
+  // auto-play: advance every 6.5s, loop back to the start
+  useEffect(() => {
+    if (!auto) return;
+    const t = setTimeout(() => {
+      setIndex((cur) => {
+        const next = cur + 1 >= slides.length ? 0 : cur + 1;
+        setDir(next >= cur ? 1 : -1);
+        return next;
+      });
+    }, 6500);
+    return () => clearTimeout(t);
+  }, [auto, index, slides.length]);
+
+  // fade the keyboard hint after a few seconds
+  useEffect(() => {
+    const t = setTimeout(() => setShowHint(false), 4500);
+    return () => clearTimeout(t);
+  }, []);
+
   if (!slides.length) {
     return (
       <div className="grid min-h-screen place-items-center text-white/70">
@@ -96,6 +133,17 @@ export function Presenter({
         />
       </div>
 
+      {/* progress bar */}
+      <div className="absolute inset-x-0 top-0 z-30 h-1 bg-white/10">
+        <div
+          className="sigma-gradient h-full transition-all duration-500"
+          style={{ width: `${((index + 1) / slides.length) * 100}%` }}
+        />
+      </div>
+
+      {/* celebration on the closing slide */}
+      {slide.type === "THANKYOU" && <Confetti key={`confetti-${index}`} />}
+
       {/* top bar */}
       <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-6 py-4 text-white/80">
         <Link
@@ -108,6 +156,16 @@ export function Presenter({
           <span className="tabular-nums">
             {index + 1} / {slides.length}
           </span>
+          <button
+            onClick={() => setAuto((a) => !a)}
+            className={`rounded-full px-4 py-1.5 font-semibold backdrop-blur transition ${
+              auto
+                ? "bg-sigma-yellow text-sigma-ink"
+                : "bg-white/10 hover:bg-white/20"
+            }`}
+          >
+            {auto ? "❚❚ Auto" : "▶ Auto"}
+          </button>
           <button
             onClick={toggleFs}
             className="rounded-full bg-white/10 px-4 py-1.5 font-semibold backdrop-blur transition hover:bg-white/20"
@@ -161,6 +219,15 @@ export function Presenter({
         onClick={() => go(index + 1)}
         className="absolute inset-y-0 right-0 z-10 w-1/4 cursor-e-resize focus:outline-none"
       />
+
+      {/* keyboard hint */}
+      {showHint && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-16 z-20 flex justify-center">
+          <div className="rounded-full bg-white/10 px-4 py-1.5 text-xs text-white/70 backdrop-blur">
+            ← → or space to navigate · F for full screen · ▶ Auto to loop
+          </div>
+        </div>
+      )}
 
       {/* progress dots */}
       <div className="absolute inset-x-0 bottom-0 z-20 flex items-center justify-center gap-2 pb-6">

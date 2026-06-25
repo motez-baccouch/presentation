@@ -116,6 +116,11 @@ export interface SlideData {
   document: SlideDocument;
 }
 
+export interface SlideTask {
+  title: string;
+  detail?: string;
+}
+
 export type SummaryStatus = "In Progress" | "In Review" | "Released";
 
 export interface SummaryItem {

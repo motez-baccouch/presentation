@@ -4,6 +4,7 @@ import {
   TextElement,
   ImageElement,
   ShapeElement,
+  SlideTask,
   SummaryItem,
   SummaryStatus,
   STAGE_WIDTH,
@@ -196,44 +197,69 @@ export function buildTitleSlide(opts: {
   return { background: { kind: "mesh" }, elements };
 }
 
-// Split bullets into pages so they never run into the footer. Page 1 has the
+// Split tasks into pages so they never run into the footer. Page 1 has the
 // full header (less room); continuation pages have a slim header (more room).
-const BULLET_FONT = 22;
-const BULLET_GAP = 16;
-const AREA_BOTTOM = 596;
-const PAGE1_TOP = 322;
-const CONT_TOP = 250;
+const TITLE_FONT = 23;
+const DETAIL_FONT = 17;
+const TASK_GAP = 18;
+const DETAIL_GAP = 4;
+const AREA_BOTTOM = 600;
+const PAGE1_TOP = 320;
+const CONT_TOP = 248;
 
-function bulletHeight(text: string, charsPerLine: number): number {
-  const rows = Math.max(1, Math.ceil(text.length / charsPerLine));
-  return rows * (BULLET_FONT * 1.25) + BULLET_GAP;
+function rows(text: string, charsPerLine: number): number {
+  return Math.max(1, Math.ceil(text.length / charsPerLine));
 }
 
-function paginate(bullets: string[], textW: number): string[][] {
-  const charsPerLine = Math.max(18, Math.floor(textW / (BULLET_FONT * 0.55)));
+function taskHeight(task: SlideTask, textW: number): number {
+  const titleCpl = Math.max(16, Math.floor(textW / (TITLE_FONT * 0.55)));
+  const detailCpl = Math.max(20, Math.floor(textW / (DETAIL_FONT * 0.52)));
+  let h = rows(task.title, titleCpl) * (TITLE_FONT * 1.2);
+  if (task.detail) h += DETAIL_GAP + rows(task.detail, detailCpl) * (DETAIL_FONT * 1.3);
+  return h + TASK_GAP;
+}
+
+/** Turn loosely-structured input into title/detail tasks. */
+function normalizeTasks(data: {
+  bullets?: string[];
+  tasks?: SlideTask[];
+}): SlideTask[] {
+  if (data.tasks?.length) return data.tasks;
+  if (data.bullets?.length) {
+    return data.bullets.map((b) => {
+      const parts = b.split(/\s+[—–]\s+/);
+      return parts.length > 1
+        ? { title: parts[0].trim(), detail: parts.slice(1).join(" — ").trim() }
+        : { title: b.trim() };
+    });
+  }
+  return [{ title: "Add what you worked on this week." }];
+}
+
+function paginate(tasks: SlideTask[], textW: number): SlideTask[][] {
   const page1Cap = AREA_BOTTOM - PAGE1_TOP;
   const contCap = AREA_BOTTOM - CONT_TOP;
-  const pages: string[][] = [];
-  let cur: string[] = [];
+  const pages: SlideTask[][] = [];
+  let cur: SlideTask[] = [];
   let used = 0;
   let cap = page1Cap;
-  for (const b of bullets) {
-    const h = bulletHeight(b, charsPerLine);
+  for (const t of tasks) {
+    const h = taskHeight(t, textW);
     if (cur.length && used + h > cap) {
       pages.push(cur);
       cur = [];
       used = 0;
       cap = contCap;
     }
-    cur.push(b);
+    cur.push(t);
     used += h;
   }
   if (cur.length) pages.push(cur);
-  return pages.length ? pages : [["Add what you worked on this week."]];
+  return pages.length ? pages : [[{ title: "Add what you worked on this week." }]];
 }
 
 interface PageMeta {
-  bullets: string[];
+  tasks: SlideTask[];
   pageIndex: number;
   pageCount: number;
 }
@@ -253,7 +279,7 @@ function personPage(
       : { textX: 96, textW: 640, markerX: 64, avatarX: 858, blobX: 815 };
 
   const areaTop = isCont ? CONT_TOP : PAGE1_TOP;
-  const charsPerLine = Math.max(18, Math.floor(geo.textW / (BULLET_FONT * 0.55)));
+  const titleCpl = Math.max(16, Math.floor(geo.textW / (TITLE_FONT * 0.55)));
 
   const elements: SlideElement[] = [];
 
@@ -346,14 +372,15 @@ function personPage(
     );
   }
 
-  // bullets (packed)
+  // tasks (packed): bold title + optional detail line
   let y = areaTop;
-  for (const b of page.bullets) {
+  for (const t of page.tasks) {
+    const hasDetail = !!t.detail;
     elements.push(
       shape({
         kind: "rect",
         x: geo.markerX,
-        y: y + 8,
+        y: y + 7,
         w: 14,
         h: 14,
         radius: 4,
@@ -364,20 +391,39 @@ function personPage(
     );
     elements.push(
       text({
-        text: b,
+        text: t.title,
         role: "bullet",
         x: geo.textX,
         y,
         w: geo.textW,
-        fontSize: BULLET_FONT,
-        fontWeight: 400,
-        lineHeight: 1.25,
+        fontFamily: hasDetail ? DISPLAY : SANS,
+        fontSize: TITLE_FONT,
+        fontWeight: hasDetail ? 700 : 400,
+        lineHeight: 1.2,
         color: INK,
         anim: "up",
         z: 6,
       }),
     );
-    y += bulletHeight(b, charsPerLine);
+    const titleH = rows(t.title, titleCpl) * (TITLE_FONT * 1.2);
+    if (t.detail) {
+      elements.push(
+        text({
+          text: t.detail,
+          role: "body",
+          x: geo.textX,
+          y: y + titleH + DETAIL_GAP,
+          w: geo.textW,
+          fontSize: DETAIL_FONT,
+          fontWeight: 400,
+          lineHeight: 1.3,
+          color: "#6b5836",
+          anim: "up",
+          z: 6,
+        }),
+      );
+    }
+    y += taskHeight(t, geo.textW);
   }
 
   // page pill when multi-page
@@ -414,17 +460,19 @@ function personPage(
 /** Build one or more slides for a person, splitting long updates across pages. */
 export function buildPersonSlides(
   member: TeamMember,
-  data: { role?: string; bullets: string[]; eyebrow?: string },
+  data: {
+    role?: string;
+    eyebrow?: string;
+    bullets?: string[];
+    tasks?: SlideTask[];
+  },
 ): SlideDocument[] {
   const side = member.style.avatar;
   const textW = side === "left" ? 700 : 640;
-  const pages = paginate(
-    data.bullets.length ? data.bullets : ["Add what you worked on this week."],
-    textW,
-  );
-  return pages.map((bullets, i) =>
+  const pages = paginate(normalizeTasks(data), textW);
+  return pages.map((tasks, i) =>
     personPage(member, data, {
-      bullets,
+      tasks,
       pageIndex: i,
       pageCount: pages.length,
     }),
@@ -434,7 +482,12 @@ export function buildPersonSlides(
 /** Single-slide convenience (first page only). */
 export function buildPersonSlide(
   member: TeamMember,
-  data: { role?: string; bullets: string[]; eyebrow?: string },
+  data: {
+    role?: string;
+    eyebrow?: string;
+    bullets?: string[];
+    tasks?: SlideTask[];
+  },
 ): SlideDocument {
   return buildPersonSlides(member, data)[0];
 }

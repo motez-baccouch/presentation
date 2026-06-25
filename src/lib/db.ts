@@ -248,6 +248,26 @@ export async function reorderSlides(orderedIds: string[]): Promise<void> {
   );
 }
 
+/**
+ * A cheap fingerprint of the deck that changes whenever any slide is added,
+ * removed, or edited. Front ends poll this to auto-refresh without reloading.
+ */
+export async function getDeckVersion(): Promise<string> {
+  if (!USE_PRISMA) {
+    const data = fileRead();
+    let h = 5381;
+    const s = JSON.stringify(data.slides);
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return `${data.slides.length}-${h >>> 0}`;
+  }
+  const { prisma } = await import("./prisma");
+  const agg = await prisma.slide.aggregate({
+    _count: true,
+    _max: { updatedAt: true },
+  });
+  return `${agg._count}-${agg._max.updatedAt?.getTime() ?? 0}`;
+}
+
 /** Create or update the single AI status-board summary slide (before thank-you). */
 export async function upsertSummarySlide(
   document: SlideDocument,

@@ -166,6 +166,21 @@ export function Inspector({
     }
   }
 
+  async function rewrite(instruction: string) {
+    if (!selected || selected.type !== "text" || !instruction.trim()) return;
+    setBusy("ai");
+    const res = await fetch("/api/ai/rewrite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: selected.text, instruction }),
+    });
+    setBusy("");
+    if (res.ok) {
+      const { text } = await res.json();
+      onUpdateElement(selected.id, { text });
+    }
+  }
+
   function addText() {
     onAddElement({
       id: genId(),
@@ -262,6 +277,7 @@ export function Inspector({
           busy={busy}
           onChange={(p) => onUpdateElement(selected.id, p)}
           onFix={fixGrammar}
+          onRewrite={rewrite}
           onDelete={() => onDeleteElement(selected.id)}
         />
       )}
@@ -362,28 +378,84 @@ export function Inspector({
   );
 }
 
+const AI_PRESETS: { label: string; instruction: string }[] = [
+  { label: "Improve", instruction: "Improve clarity and flow without changing the meaning." },
+  { label: "Shorten", instruction: "Make it more concise and punchy." },
+  { label: "Expand", instruction: "Expand into a fuller, well-written sentence or two." },
+  { label: "Professional", instruction: "Rewrite in a polished, professional tone." },
+  { label: "Friendlier", instruction: "Rewrite in a warmer, friendlier tone." },
+];
+
 function TextProps({
   el,
   busy,
   onChange,
   onFix,
+  onRewrite,
   onDelete,
 }: {
   el: TextElement;
   busy: string;
   onChange: (p: Partial<TextElement>) => void;
   onFix: () => void;
+  onRewrite: (instruction: string) => void;
   onDelete: () => void;
 }) {
+  const [prompt, setPrompt] = useState("");
+  const aiBusy = busy === "ai";
   return (
     <Section title="Text">
-      <button
-        onClick={onFix}
-        disabled={busy === "ai"}
-        className="sigma-gradient mb-3 w-full rounded-lg py-2 text-xs font-bold text-white shadow-card transition hover:brightness-105 disabled:opacity-60"
-      >
-        {busy === "ai" ? "Fixing…" : "✨ Fix grammar with AI"}
-      </button>
+      {/* AI assist */}
+      <div className="mb-3 rounded-xl border border-sigma-orange/30 bg-sigma-orange/5 p-2.5">
+        <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-sigma-orange">
+          ✨ AI assist
+        </div>
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          <button
+            onClick={onFix}
+            disabled={aiBusy}
+            className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-sigma-ink shadow-sm transition hover:bg-sigma-sand disabled:opacity-60"
+          >
+            Fix grammar
+          </button>
+          {AI_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              onClick={() => onRewrite(p.instruction)}
+              disabled={aiBusy}
+              className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-sigma-ink shadow-sm transition hover:bg-sigma-sand disabled:opacity-60"
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1.5">
+          <input
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && prompt.trim()) {
+                onRewrite(prompt);
+                setPrompt("");
+              }
+            }}
+            placeholder="Tell AI what to do…"
+            className="min-w-0 flex-1 rounded-lg border border-sigma-ink/15 bg-white px-2 py-1.5 text-xs outline-none ring-sigma-orange/40 focus:ring-2"
+          />
+          <button
+            onClick={() => {
+              if (prompt.trim()) {
+                onRewrite(prompt);
+                setPrompt("");
+              }
+            }}
+            disabled={aiBusy || !prompt.trim()}
+            className="sigma-gradient rounded-lg px-3 py-1.5 text-xs font-bold text-white shadow-card transition hover:brightness-105 disabled:opacity-50"
+          >
+            {aiBusy ? "…" : "Go"}
+          </button>
+        </div>
+      </div>
 
       <label className="mb-1 block text-xs text-sigma-ink/50">Font</label>
       <select

@@ -16,6 +16,7 @@ import { EditorCanvas } from "./EditorCanvas";
 import { Inspector } from "./Inspector";
 import { usePresence } from "./usePresence";
 import { NamePrompt, PresencePills } from "./Presence";
+import { useDeckVersion } from "../useDeckVersion";
 
 type SaveState = "idle" | "saving" | "saved";
 
@@ -41,6 +42,8 @@ export function Editor({
   slidesRef.current = slides;
   const dirty = useRef<Set<string>>(new Set());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshKnownRef = useRef<() => Promise<void>>(async () => {});
+  const [deckChanged, setDeckChanged] = useState(false);
 
   const current = slides[Math.min(index, slides.length - 1)];
   const selected = useMemo(
@@ -61,6 +64,20 @@ export function Editor({
     ? presence.others.filter((o) => o.slideId === current.id).map((o) => o.name)
     : [];
 
+  const reloadDeck = useCallback(async () => {
+    const deck: PresentationData = await (
+      await fetch("/api/presentation", { cache: "no-store" })
+    ).json();
+    setSlides(deck.slides);
+    setIndex((i) => Math.min(i, deck.slides.length - 1));
+    setSelectedId(null);
+    setDeckChanged(false);
+    await refreshKnownRef.current();
+  }, []);
+
+  const { refreshKnown } = useDeckVersion(() => setDeckChanged(true));
+  refreshKnownRef.current = refreshKnown;
+
   const flush = useCallback(async () => {
     const ids = [...dirty.current];
     dirty.current.clear();
@@ -78,6 +95,8 @@ export function Editor({
       }),
     );
     setSaveState("saved");
+    // our own saves shouldn't trigger the "deck updated" banner
+    await refreshKnownRef.current();
   }, []);
 
   const markDirty = useCallback(
@@ -312,6 +331,24 @@ export function Editor({
           </Link>
         </div>
       </div>
+
+      {deckChanged && (
+        <div className="flex items-center justify-center gap-3 bg-sigma-yellow px-4 py-2 text-sm font-semibold text-sigma-ink">
+          <span>🔄 The deck changed elsewhere (a teammate or Slack update).</span>
+          <button
+            onClick={reloadDeck}
+            className="rounded-full bg-sigma-ink px-3 py-1 text-xs font-bold text-white transition hover:brightness-125"
+          >
+            Load latest
+          </button>
+          <button
+            onClick={() => setDeckChanged(false)}
+            className="text-xs font-semibold text-sigma-ink/60 hover:text-sigma-ink"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* body */}
       <div className="flex min-h-0 flex-1">

@@ -36,10 +36,25 @@ body {
   background-image: linear-gradient(135deg, #fbbf09 0%, #f79009 45%, #f4691e 100%);
 }
 .sigma-gradient-text {
-  background-image: linear-gradient(120deg, #f79009 0%, #f4691e 60%, #e8420e 100%);
+  background-image: linear-gradient(
+    120deg,
+    #f79009 0%,
+    #f4691e 35%,
+    #fbbf09 55%,
+    #f4691e 75%,
+    #e8420e 100%
+  );
+  background-size: 220% auto;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  animation: gradient-pan 6s linear infinite;
+}
+
+@keyframes gradient-pan {
+  to {
+    background-position: 220% center;
+  }
 }
 
 /* Animated mesh used behind present mode */

@@ -109,11 +109,13 @@ export async function POST(req: Request) {
         const documents = buildPersonSlides(member, {
           role: formatted.role ?? member.role,
           eyebrow: formatted.eyebrow ?? undefined,
-          bullets: formatted.bullets,
+          tasks: formatted.tasks,
         });
         await upsertPersonSlides(member.key, documents);
         const link = `${base}/edit?slide=${member.key}`;
-        const bulletList = formatted.bullets.map((b) => `  • ${b}`).join("\n");
+        const bulletList = formatted.tasks
+          .map((t) => `  • ${t.title}`)
+          .join("\n");
         await respond(
           responseUrl,
           `✅ Updated *${member.name}*'s slide:\n${bulletList}\n\n✏️ Tweak it: ${link}\n▶️ Present: ${base}/present`,

@@ -1,5 +1,5 @@
 import Groq from "groq-sdk";
-import { SummaryItem, SummaryStatus } from "./types";
+import { SlideTask, SummaryItem, SummaryStatus } from "./types";
 
 const MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 const STATUSES: SummaryStatus[] = ["In Progress", "In Review", "Released"];
@@ -13,65 +13,90 @@ function client(): Groq | null {
 export interface FormattedUpdate {
   role: string | null;
   eyebrow: string | null;
-  bullets: string[];
+  tasks: SlideTask[];
 }
 
 /** Naive fallback used when no GROQ_API_KEY is configured. */
-function naiveFormat(raw: string): FormattedUpdate {
-  const lines = raw
+function naiveTasks(raw: string): SlideTask[] {
+  return raw
     .split(/\n|(?<=[.!?])\s+|•|^-\s|;\s/gm)
     .map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim())
-    .filter((l) => l.length > 1);
-  return { role: null, eyebrow: null, bullets: lines.slice(0, 8) };
+    .filter((l) => l.length > 1)
+    .slice(0, 8)
+    .map((l) => {
+      // use the first few words as a title, the rest as detail
+      const words = l.split(" ");
+      if (words.length <= 7) return { title: l };
+      return { title: words.slice(0, 6).join(" "), detail: l };
+    });
+}
+
+/** Naive split into plain bullet strings (used by reformatToBullets). */
+function naiveBullets(raw: string): string[] {
+  return raw
+    .split(/\n|(?<=[.!?])\s+|•|^-\s|;\s/gm)
+    .map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim())
+    .filter((l) => l.length > 1)
+    .slice(0, 8);
+}
+
+function coerceTasks(arr: unknown): SlideTask[] {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map((t) => {
+      if (typeof t === "string") return { title: t.trim() };
+      const o = t as { title?: unknown; detail?: unknown };
+      const title = o.title ? String(o.title).trim() : "";
+      const detail = o.detail ? String(o.detail).trim() : undefined;
+      return title ? { title, detail } : null;
+    })
+    .filter(Boolean) as SlideTask[];
 }
 
 /**
  * Turn a teammate's free-text Slack message into a structured slide update.
- * Groq decides what (if anything) is a role/title line vs. actual work bullets,
- * and cleans up grammar/spelling.
+ * Groq detects the distinct tasks, gives each a short TITLE plus a cleaned
+ * detail line, and infers a role only if clearly stated.
  */
 export async function formatUpdate(
   name: string,
   raw: string,
 ): Promise<FormattedUpdate> {
   const groq = client();
-  if (!groq) return naiveFormat(raw);
+  if (!groq) return { role: null, eyebrow: null, tasks: naiveTasks(raw) };
 
-  const system = `You prepare a software developer's weekly update for a single presentation slide for the company "Sigma Lending".
-Given the person's name and their raw message, return STRICT JSON with this shape:
-{"role": string|null, "eyebrow": string|null, "bullets": string[]}
+  const system = `You are a sharp editor turning a software developer's rough weekly notes into a polished presentation slide for the company "Sigma Lending". Do NOT copy their text verbatim — restructure it.
+Return STRICT JSON: {"role": string|null, "eyebrow": string|null, "tasks": [{"title": string, "detail": string}]}
 
-Rules:
-- "bullets": each item is ONE concise, self-contained task the person worked on. Fix spelling and grammar, keep technical terms, product names, and numbers exactly (e.g. Plaid, Creditsafe, VRP, CCJ, £7,500). Do NOT start a bullet with a dash or bullet character. Aim for 1-8 bullets. Merge fragments that belong together; split distinct tasks apart.
-- "role": only a short job-title / role line IF the message clearly states one (e.g. "the open banking guy", "ML engineer"). Otherwise null. Do not invent a role.
-- "eyebrow": only a short status label IF clearly implied (e.g. "Our Newest Team Member"). Otherwise null.
-- Return ONLY the JSON object, nothing else.`;
+Rules for "tasks":
+- Identify each DISTINCT piece of work and make it one task. Merge fragments that belong together; split things that don't.
+- "title": a short, punchy headline you write yourself (3-6 words, Title Case), even if the person didn't give one. E.g. "Open Banking PR", "Plaid Connection Fix", "Creditsafe Dedupe".
+- "detail": one clean, well-written sentence describing it. Fix spelling/grammar; keep technical terms, product names, and numbers exactly (Plaid, Creditsafe, VRP, CCJ, £7,500). If the note is only a couple of words, you may omit detail (empty string).
+- 1-8 tasks, ordered most important first.
+"role": a short role line ONLY if clearly stated (e.g. "the open banking guy"), else null. "eyebrow": a short status label ONLY if clearly implied (e.g. "Our Newest Team Member"), else null.
+Return ONLY the JSON object.`;
 
   try {
     const completion = await groq.chat.completions.create({
       model: MODEL,
-      temperature: 0.3,
+      temperature: 0.35,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
-        {
-          role: "user",
-          content: `Person: ${name}\n\nRaw message:\n${raw}`,
-        },
+        { role: "user", content: `Person: ${name}\n\nRaw notes:\n${raw}` },
       ],
     });
-    const content = completion.choices[0]?.message?.content ?? "{}";
-    const parsed = JSON.parse(content) as Partial<FormattedUpdate>;
-    const bullets = Array.isArray(parsed.bullets)
-      ? parsed.bullets.map((b) => String(b).trim()).filter(Boolean)
-      : [];
+    const parsed = JSON.parse(
+      completion.choices[0]?.message?.content ?? "{}",
+    ) as { role?: unknown; eyebrow?: unknown; tasks?: unknown };
+    const tasks = coerceTasks(parsed.tasks);
     return {
       role: parsed.role ? String(parsed.role) : null,
       eyebrow: parsed.eyebrow ? String(parsed.eyebrow) : null,
-      bullets: bullets.length ? bullets : naiveFormat(raw).bullets,
+      tasks: tasks.length ? tasks : naiveTasks(raw),
     };
   } catch {
-    return naiveFormat(raw);
+    return { role: null, eyebrow: null, tasks: naiveTasks(raw) };
   }
 }
 
@@ -83,13 +108,13 @@ export interface CategoryInput {
 
 /**
  * Turn the three modal boxes (Delivered / In Review / In Progress) into clean
- * slide bullets, each prefixed with its status so both the slide and the
- * summary board read correctly.
+ * title/detail tasks, each title prefixed with its status so both the slide and
+ * the summary board read correctly.
  */
 export async function formatCategorized(
   name: string,
   cats: CategoryInput,
-): Promise<string[]> {
+): Promise<SlideTask[]> {
   const sections: [string, string][] = [
     ["Delivered", cats.delivered ?? ""],
     ["In review", cats.inReview ?? ""],
@@ -97,10 +122,10 @@ export async function formatCategorized(
   ].filter(([, v]) => v && v.trim()) as [string, string][];
   if (!sections.length) return [];
 
-  const naive = (): string[] => {
-    const out: string[] = [];
+  const naive = (): SlideTask[] => {
+    const out: SlideTask[] = [];
     for (const [label, txt] of sections) {
-      for (const b of naiveFormat(txt).bullets) out.push(`${label}: ${b}`);
+      for (const b of naiveBullets(txt)) out.push({ title: `${label}: ${b}` });
     }
     return out;
   };
@@ -111,18 +136,18 @@ export async function formatCategorized(
   try {
     const completion = await groq.chat.completions.create({
       model: MODEL,
-      temperature: 0.3,
+      temperature: 0.35,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content: `You format ${name}'s weekly dev update into slide bullets for "Sigma Lending".
-You receive up to three buckets: "Delivered", "In review", "In progress".
-Return STRICT JSON {"bullets": string[]}. For each distinct task output ONE concise bullet:
-- fix spelling/grammar, keep technical terms, product names, and numbers exactly (Plaid, Creditsafe, VRP, CCJ, £7,500);
-- PREFIX each bullet with its bucket and a colon, e.g. "Delivered: Video call template tab";
-- keep the order Delivered, then In review, then In progress;
-- no leading dashes or bullet characters.`,
+          content: `You turn ${name}'s rough weekly notes into polished slide tasks for "Sigma Lending". You receive up to three buckets: "Delivered", "In review", "In progress". Do NOT copy text verbatim — restructure it.
+Return STRICT JSON: {"tasks": [{"title": string, "detail": string}]}.
+For each distinct piece of work:
+- "title": a short headline YOU write (3-6 words, Title Case), PREFIXED with its bucket, e.g. "Delivered: Video Call Template" or "In review: Broker Commissions".
+- "detail": one clean sentence describing it; fix grammar, keep technical terms, product names, and numbers (Plaid, Creditsafe, VRP, CCJ, £7,500). Omit (empty string) if the note is just a couple of words.
+- Order: Delivered first, then In review, then In progress. 1-8 tasks total.
+Return ONLY the JSON object.`,
         },
         {
           role: "user",
@@ -132,10 +157,9 @@ Return STRICT JSON {"bullets": string[]}. For each distinct task output ONE conc
     });
     const parsed = JSON.parse(
       completion.choices[0]?.message?.content ?? "{}",
-    ) as { bullets?: string[] };
-    return Array.isArray(parsed.bullets) && parsed.bullets.length
-      ? parsed.bullets.map((b) => String(b).trim()).filter(Boolean)
-      : naive();
+    ) as { tasks?: unknown };
+    const tasks = coerceTasks(parsed.tasks);
+    return tasks.length ? tasks : naive();
   } catch {
     return naive();
   }
@@ -215,10 +239,39 @@ Return STRICT JSON: {"items": [...]}. Include every task.`,
   }
 }
 
+/** Rewrite a slide text fragment following a free-form instruction. */
+export async function rewriteText(
+  text: string,
+  instruction: string,
+): Promise<string> {
+  const groq = client();
+  if (!groq) return text;
+  try {
+    const completion = await groq.chat.completions.create({
+      model: MODEL,
+      temperature: 0.4,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You edit a piece of text that lives on a presentation slide for the company \"Sigma Lending\". Apply the user's instruction to their text. Keep it crisp and presentation-appropriate, preserve technical terms, product names, and numbers. Return ONLY the resulting text — no quotes, labels, or commentary.",
+        },
+        {
+          role: "user",
+          content: `Instruction: ${instruction}\n\nText:\n${text}`,
+        },
+      ],
+    });
+    return completion.choices[0]?.message?.content?.trim() || text;
+  } catch {
+    return text;
+  }
+}
+
 /** Turn a blob of text into clean bullet points. */
 export async function reformatToBullets(text: string): Promise<string[]> {
   const groq = client();
-  if (!groq) return naiveFormat(text).bullets;
+  if (!groq) return naiveBullets(text);
   try {
     const completion = await groq.chat.completions.create({
       model: MODEL,
@@ -238,8 +291,8 @@ export async function reformatToBullets(text: string): Promise<string[]> {
     ) as { bullets?: string[] };
     return Array.isArray(parsed.bullets) && parsed.bullets.length
       ? parsed.bullets.map((b) => String(b).trim()).filter(Boolean)
-      : naiveFormat(text).bullets;
+      : naiveBullets(text);
   } catch {
-    return naiveFormat(text).bullets;
+    return naiveBullets(text);
   }
 }

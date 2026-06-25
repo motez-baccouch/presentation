@@ -54,12 +54,12 @@ export async function POST(req: Request) {
     const base = appUrl(req);
     after(async () => {
       try {
-        const bullets = await formatCategorized(member.name, {
+        const tasks = await formatCategorized(member.name, {
           delivered,
           inReview,
           inProgress,
         });
-        const documents = buildPersonSlides(member, { bullets });
+        const documents = buildPersonSlides(member, { tasks });
         await upsertPersonSlides(member.key, documents);
         if (userId) {
           await slackApi("chat.postMessage", {
