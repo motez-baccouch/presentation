@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sigma-yellow: #fbbf09;
+  --color-sigma-amber: #f79009;
+  --color-sigma-orange: #f4691e;
+  --color-sigma-red: #e8420e;
+  --color-sigma-ink: #1c1407;
+  --color-sigma-cream: #fff8ea;
+  --color-sigma-sand: #f4ecdd;
+
+  --font-display: var(--font-poppins);
+  --font-sans: var(--font-inter);
+
+  --shadow-slide: 0 30px 80px -20px rgba(28, 20, 7, 0.35);
+  --shadow-card: 0 14px 40px -14px rgba(28, 20, 7, 0.25);
+}
+
+:root {
+  --background: #fff8ea;
+  --foreground: #1c1407;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+/* Brand gradient helpers */
+.sigma-gradient {
+  background-image: linear-gradient(135deg, #fbbf09 0%, #f79009 45%, #f4691e 100%);
+}
+.sigma-gradient-text {
+  background-image: linear-gradient(120deg, #f79009 0%, #f4691e 60%, #e8420e 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Animated mesh used behind present mode */
+.sigma-mesh {
+  background-color: #fff8ea;
+  background-image:
+    radial-gradient(at 18% 22%, rgba(251, 191, 9, 0.45) 0px, transparent 55%),
+    radial-gradient(at 82% 12%, rgba(244, 105, 30, 0.4) 0px, transparent 50%),
+    radial-gradient(at 70% 88%, rgba(247, 144, 9, 0.35) 0px, transparent 55%),
+    radial-gradient(at 12% 82%, rgba(232, 66, 14, 0.28) 0px, transparent 50%);
+}
+
+/* Thin custom scrollbar for the editor rails */
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(28, 20, 7, 0.18);
+  border-radius: 999px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[contenteditable]:focus {
+  outline: none;
+}
+
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-14px) rotate(3deg); }
+}
+.animate-float-slow {
+  animation: float-slow 7s ease-in-out infinite;
+}

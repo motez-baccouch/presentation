@@ -1,0 +1,42 @@
+// Sigma Presentation Studio — data model.
+// Postgres (Neon) in production. Locally the app falls back to a JSON file
+// store when DATABASE_URL is unset (see src/lib/db.ts).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SlideType {
+  TITLE
+  PERSON
+  SUMMARY
+  THANKYOU
+  CUSTOM
+}
+
+model Presentation {
+  id        String   @id @default(cuid())
+  title     String
+  weekOf    String?
+  slides    Slide[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Slide {
+  id             String       @id @default(cuid())
+  presentation   Presentation @relation(fields: [presentationId], references: [id], onDelete: Cascade)
+  presentationId String
+  order          Int
+  type           SlideType
+  personKey      String?
+  document       Json
+  updatedAt      DateTime     @updatedAt
+
+  @@index([presentationId, order])
+}
