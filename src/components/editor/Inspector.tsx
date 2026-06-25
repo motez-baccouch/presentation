@@ -93,9 +93,12 @@ export function Inspector({
     const form = new FormData();
     form.append("file", file);
     const res = await fetch("/api/upload", { method: "POST", body: form });
-    if (!res.ok) return null;
-    const { url } = await res.json();
-    return url as string;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(data.error ?? "Upload failed.");
+      return null;
+    }
+    return data.url as string;
   }
 
   async function addImage(file: File) {
