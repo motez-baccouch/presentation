@@ -75,6 +75,72 @@ Rules:
   }
 }
 
+export interface CategoryInput {
+  delivered?: string;
+  inReview?: string;
+  inProgress?: string;
+}
+
+/**
+ * Turn the three modal boxes (Delivered / In Review / In Progress) into clean
+ * slide bullets, each prefixed with its status so both the slide and the
+ * summary board read correctly.
+ */
+export async function formatCategorized(
+  name: string,
+  cats: CategoryInput,
+): Promise<string[]> {
+  const sections: [string, string][] = [
+    ["Delivered", cats.delivered ?? ""],
+    ["In review", cats.inReview ?? ""],
+    ["In progress", cats.inProgress ?? ""],
+  ].filter(([, v]) => v && v.trim()) as [string, string][];
+  if (!sections.length) return [];
+
+  const naive = (): string[] => {
+    const out: string[] = [];
+    for (const [label, txt] of sections) {
+      for (const b of naiveFormat(txt).bullets) out.push(`${label}: ${b}`);
+    }
+    return out;
+  };
+
+  const groq = client();
+  if (!groq) return naive();
+
+  try {
+    const completion = await groq.chat.completions.create({
+      model: MODEL,
+      temperature: 0.3,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `You format ${name}'s weekly dev update into slide bullets for "Sigma Lending".
+You receive up to three buckets: "Delivered", "In review", "In progress".
+Return STRICT JSON {"bullets": string[]}. For each distinct task output ONE concise bullet:
+- fix spelling/grammar, keep technical terms, product names, and numbers exactly (Plaid, Creditsafe, VRP, CCJ, £7,500);
+- PREFIX each bullet with its bucket and a colon, e.g. "Delivered: Video call template tab";
+- keep the order Delivered, then In review, then In progress;
+- no leading dashes or bullet characters.`,
+        },
+        {
+          role: "user",
+          content: JSON.stringify(Object.fromEntries(sections)),
+        },
+      ],
+    });
+    const parsed = JSON.parse(
+      completion.choices[0]?.message?.content ?? "{}",
+    ) as { bullets?: string[] };
+    return Array.isArray(parsed.bullets) && parsed.bullets.length
+      ? parsed.bullets.map((b) => String(b).trim()).filter(Boolean)
+      : naive();
+  } catch {
+    return naive();
+  }
+}
+
 /** Fix grammar/spelling of a single text fragment, preserving meaning + terms. */
 export async function fixGrammar(text: string): Promise<string> {
   const groq = client();

@@ -62,7 +62,45 @@ This regenerates the AI **status board** (In Progress / In Review / Released)
 from everyone's slides and posts the recap **into the channel** so the whole
 team sees it, with a link to present.
 
+## Enable the `/presentation` form (interactivity)
+
+Typing just `/presentation` (no text) opens a popup with a **teammate dropdown**
+and three boxes — **✅ Delivered**, **👀 In Testing / Review**, **🔨 In Progress**.
+This needs the bot token (below) plus interactivity turned on:
+
+1. Slack app → **Interactivity & Shortcuts** → toggle **On**.
+2. **Request URL:** `https://YOUR-APP.vercel.app/api/slack/interactivity` → **Save**.
+3. Make sure the bot token + scopes from the next section are set (the form is
+   opened and submitted using the bot token).
+
+When someone submits the form, their slide is built (AI cleans the grammar and
+files each box under its status) and they get a DM with the edit link. The
+inline `/presentation <name> <text>` and `/presentation summary` still work too.
+
+## Enable the "📣 Post to Slack" button (bot token)
+
+The editor has a button that posts a rich weekly recap — with a picture of the
+status board and a clickable button — into your **#weekly-updates** channel.
+This needs a bot token (the signing secret alone isn't enough):
+
+1. Slack app → **OAuth & Permissions** → **Scopes → Bot Token Scopes** → add
+   **`chat:write`** (and **`chat:write.public`** if you'd rather not invite the
+   bot to the channel).
+2. **Install / Reinstall to Workspace** → copy the **Bot User OAuth Token**
+   (starts with `xoxb-`).
+3. In Vercel env vars add:
+   - `SLACK_BOT_TOKEN` = the `xoxb-…` token
+   - `SLACK_SUMMARY_CHANNEL` = `C0BD2B4S9TQ` (your #weekly-updates channel id)
+4. In Slack, invite the bot to the channel: in **#weekly-updates** type
+   `/invite @Sigma Presentation` (skip if you added `chat:write.public`).
+5. Redeploy. Now the **📣 Post to Slack** button in the editor posts the recap.
+
 ## Troubleshooting
+
+- **The command replied with a wall of HTML / the whole webpage:** the slash
+  command **Request URL** is wrong — it must end in **`/api/slack/command`**,
+  not just your domain. Fix it under **Slash Commands → /presentation**, save,
+  and try again.
 
 - **"dispatch_failed" / timeout in Slack:** the function took >3s to ack. The
   app acks immediately and does AI work in the background, so this usually means

@@ -18,6 +18,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { SlideData } from "@/lib/types";
 import { SlideThumb } from "../SlideThumb";
 import { getMember } from "@/lib/team";
+import { Avatar } from "./Presence";
 
 function thumbLabel(slide: SlideData, i: number): string {
   const member = slide.personKey ? getMember(slide.personKey) : null;
@@ -32,6 +33,7 @@ function SortableThumb({
   slide,
   i,
   active,
+  editors,
   onSelect,
   onDuplicate,
   onDelete,
@@ -39,6 +41,7 @@ function SortableThumb({
   slide: SlideData;
   i: number;
   active: boolean;
+  editors: string[];
   onSelect: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
@@ -68,9 +71,16 @@ function SortableThumb({
         <span
           {...attributes}
           {...listeners}
-          className="flex-1 cursor-grab overflow-hidden rounded-lg border border-sigma-ink/10 active:cursor-grabbing"
+          className="relative flex-1 cursor-grab overflow-hidden rounded-lg border border-sigma-ink/10 active:cursor-grabbing"
         >
           <SlideThumb document={slide.document} />
+          {editors.length > 0 && (
+            <span className="absolute right-1 top-1 flex -space-x-1.5">
+              {Array.from(new Set(editors)).slice(0, 3).map((n) => (
+                <Avatar key={n} name={n} size={18} />
+              ))}
+            </span>
+          )}
         </span>
       </button>
       <div className="pointer-events-none absolute right-2 top-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
@@ -109,6 +119,7 @@ function SortableThumb({
 export function SlideRail({
   slides,
   index,
+  presenceBySlide,
   onSelect,
   onAdd,
   onDuplicate,
@@ -117,6 +128,7 @@ export function SlideRail({
 }: {
   slides: SlideData[];
   index: number;
+  presenceBySlide: Record<string, string[]>;
   onSelect: (i: number) => void;
   onAdd: () => void;
   onDuplicate: (id: string) => void;
@@ -153,6 +165,7 @@ export function SlideRail({
               slide={slide}
               i={i}
               active={i === index}
+              editors={presenceBySlide[slide.id] ?? []}
               onSelect={() => onSelect(i)}
               onDuplicate={() => onDuplicate(slide.id)}
               onDelete={() => onDelete(slide.id)}

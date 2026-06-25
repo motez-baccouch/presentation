@@ -21,6 +21,7 @@ import {
   ShapeContent,
   textStyle,
 } from "../stage/elements";
+import { EditingHereBadge } from "./Presence";
 
 function TextEditable({
   el,
@@ -83,11 +84,13 @@ function TextEditable({
 export function EditorCanvas({
   slide,
   selectedId,
+  othersHere = [],
   onSelect,
   onUpdateElement,
 }: {
   slide: SlideData;
   selectedId: string | null;
+  othersHere?: string[];
   onSelect: (id: string | null) => void;
   onUpdateElement: (id: string, patch: Partial<SlideElement>) => void;
 }) {
@@ -119,7 +122,8 @@ export function EditorCanvas({
   );
 
   return (
-    <section className="thin-scroll flex flex-1 items-center justify-center overflow-auto bg-sigma-sand p-6">
+    <section className="thin-scroll relative flex flex-1 items-center justify-center overflow-auto bg-sigma-sand p-6">
+      <EditingHereBadge names={othersHere} />
       <div
         ref={wrapRef}
         className="relative w-full max-w-[1000px] overflow-hidden rounded-2xl bg-white shadow-slide"

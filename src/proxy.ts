@@ -20,6 +20,8 @@ export async function proxy(req: NextRequest) {
     pathname.startsWith("/api/slides") ||
     pathname.startsWith("/api/upload") ||
     pathname.startsWith("/api/summary") ||
+    pathname.startsWith("/api/presence") ||
+    pathname.startsWith("/api/slack/post-summary") ||
     pathname.startsWith("/api/ai");
   if (isProtectedApi && req.method !== "GET" && !authed) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -36,6 +38,8 @@ export const config = {
     "/api/slides/:path*",
     "/api/upload",
     "/api/summary/:path*",
+    "/api/presence",
+    "/api/slack/post-summary",
     "/api/ai/:path*",
   ],
 };

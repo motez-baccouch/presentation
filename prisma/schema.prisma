@@ -40,3 +40,12 @@ model Slide {
 
   @@index([presentationId, order])
 }
+
+// Live "who's editing" presence. One row per editor browser; refreshed by a
+// heartbeat and considered active for ~20s.
+model Presence {
+  id        String   @id
+  name      String
+  slideId   String?
+  updatedAt DateTime @updatedAt
+}

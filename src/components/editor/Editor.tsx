@@ -14,6 +14,8 @@ import { buildBlankSlide } from "@/lib/templates";
 import { SlideRail } from "./SlideRail";
 import { EditorCanvas } from "./EditorCanvas";
 import { Inspector } from "./Inspector";
+import { usePresence } from "./usePresence";
+import { NamePrompt, PresencePills } from "./Presence";
 
 type SaveState = "idle" | "saving" | "saved";
 
@@ -45,6 +47,19 @@ export function Editor({
     () => current?.document.elements.find((e) => e.id === selectedId) ?? null,
     [current, selectedId],
   );
+
+  const presence = usePresence(current?.id ?? null);
+  const presenceBySlide = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const o of presence.others) {
+      if (!o.slideId) continue;
+      (map[o.slideId] ??= []).push(o.name);
+    }
+    return map;
+  }, [presence.others]);
+  const othersHere = current
+    ? presence.others.filter((o) => o.slideId === current.id).map((o) => o.name)
+    : [];
 
   const flush = useCallback(async () => {
     const ids = [...dirty.current];
@@ -216,6 +231,22 @@ export function Editor({
     }
   }, []);
 
+  const [posting, setPosting] = useState(false);
+  const postToSlack = useCallback(async () => {
+    setPosting(true);
+    try {
+      const res = await fetch("/api/slack/post-summary", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        alert("✅ Posted the summary to #weekly-updates!");
+      } else {
+        alert(`⚠️ ${data.error ?? "Could not post to Slack."}`);
+      }
+    } finally {
+      setPosting(false);
+    }
+  }, []);
+
   const reorder = useCallback((orderedIds: string[]) => {
     setSlides((prev) => {
       const map = new Map(prev.map((s) => [s.id, s]));
@@ -251,7 +282,8 @@ export function Editor({
           </span>
         </div>
         <div className="flex items-center gap-3 text-sm">
-          <span className="text-sigma-ink/50">
+          <PresencePills others={presence.others} />
+          <span className="hidden text-sigma-ink/50 sm:inline">
             {saveState === "saving"
               ? "Saving…"
               : saveState === "saved"
@@ -261,9 +293,16 @@ export function Editor({
           <button
             onClick={regenerateSummary}
             disabled={summarizing}
-            className="sigma-gradient rounded-full px-4 py-1.5 font-semibold text-white shadow-card transition hover:brightness-105 disabled:opacity-60"
+            className="rounded-full border border-sigma-ink/15 px-4 py-1.5 font-semibold text-sigma-ink transition hover:bg-sigma-sand disabled:opacity-60"
           >
             {summarizing ? "Summarizing…" : "✨ AI summary"}
+          </button>
+          <button
+            onClick={postToSlack}
+            disabled={posting}
+            className="sigma-gradient rounded-full px-4 py-1.5 font-semibold text-white shadow-card transition hover:brightness-105 disabled:opacity-60"
+          >
+            {posting ? "Posting…" : "📣 Post to Slack"}
           </button>
           <Link
             href="/present"
@@ -279,6 +318,7 @@ export function Editor({
         <SlideRail
           slides={slides}
           index={index}
+          presenceBySlide={presenceBySlide}
           onSelect={(i) => {
             setIndex(i);
             setSelectedId(null);
@@ -292,6 +332,7 @@ export function Editor({
         <EditorCanvas
           slide={current}
           selectedId={selectedId}
+          othersHere={othersHere}
           onSelect={setSelectedId}
           onUpdateElement={updateElement}
         />
@@ -305,6 +346,10 @@ export function Editor({
           onSetBackground={setBackground}
         />
       </div>
+
+      {presence.initialized && !presence.name && (
+        <NamePrompt onSave={presence.setName} />
+      )}
     </div>
   );
 }
