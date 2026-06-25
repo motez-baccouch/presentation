@@ -30,6 +30,8 @@ export interface BaseElement {
   x: number;
   y: number;
   w: number;
+  /** rotation in degrees (applied to the whole element) */
+  rotation?: number;
   /** lower renders first (behind); also drives present-mode entrance order */
   z?: number;
   /** entrance animation in present mode */
@@ -85,7 +87,6 @@ export interface ShapeElement extends BaseElement {
   h: number;
   fill: string;
   radius?: number;
-  rotation?: number;
   opacity?: number;
 }
 
@@ -119,6 +120,8 @@ export interface SlideData {
 export interface SlideTask {
   title: string;
   detail?: string;
+  /** up to 4 short, plain-language bullet points anyone can understand */
+  points?: string[];
 }
 
 export type SummaryStatus = "In Progress" | "In Review" | "Released";

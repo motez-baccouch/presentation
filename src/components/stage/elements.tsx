@@ -119,7 +119,6 @@ export function ShapeContent({ el }: { el: ShapeElement }) {
     height: "100%",
     background: el.fill,
     opacity: el.opacity ?? 1,
-    transform: el.rotation ? `rotate(${el.rotation}deg)` : undefined,
   };
   if (el.kind === "triangle") {
     return <div style={{ ...base, clipPath: "polygon(100% 0, 100% 100%, 0 100%)" }} />;

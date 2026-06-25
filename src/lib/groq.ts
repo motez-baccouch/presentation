@@ -45,10 +45,18 @@ function coerceTasks(arr: unknown): SlideTask[] {
   return arr
     .map((t) => {
       if (typeof t === "string") return { title: t.trim() };
-      const o = t as { title?: unknown; detail?: unknown };
+      const o = t as { title?: unknown; detail?: unknown; points?: unknown };
       const title = o.title ? String(o.title).trim() : "";
       const detail = o.detail ? String(o.detail).trim() : undefined;
-      return title ? { title, detail } : null;
+      const points = Array.isArray(o.points)
+        ? o.points
+            .map((p) => String(p).trim())
+            .filter(Boolean)
+            .slice(0, 4) // never more than 4 points per task
+        : undefined;
+      return title
+        ? { title, detail, points: points?.length ? points : undefined }
+        : null;
     })
     .filter(Boolean) as SlideTask[];
 }
@@ -65,13 +73,14 @@ export async function formatUpdate(
   const groq = client();
   if (!groq) return { role: null, eyebrow: null, tasks: naiveTasks(raw) };
 
-  const system = `You are a sharp editor turning a software developer's rough weekly notes into a polished presentation slide for the company "Sigma Lending". Do NOT copy their text verbatim — restructure it.
-Return STRICT JSON: {"role": string|null, "eyebrow": string|null, "tasks": [{"title": string, "detail": string}]}
+  const system = `You are a sharp editor turning a software developer's rough weekly notes (often a long PR description) into a polished presentation slide for the company "Sigma Lending". Do NOT copy their text verbatim — restructure and CONDENSE it. A PR description may be long; your job is to boil it down.
+Return STRICT JSON: {"role": string|null, "eyebrow": string|null, "tasks": [{"title": string, "detail": string, "points": string[]}]}
 
 Rules for "tasks":
 - Identify each DISTINCT piece of work and make it one task. Merge fragments that belong together; split things that don't.
 - "title": a short, punchy headline you write yourself (3-6 words, Title Case), even if the person didn't give one. E.g. "Open Banking PR", "Plaid Connection Fix", "Creditsafe Dedupe".
-- "detail": one clean, well-written sentence describing it. Fix spelling/grammar; keep technical terms, product names, and numbers exactly (Plaid, Creditsafe, VRP, CCJ, £7,500). If the note is only a couple of words, you may omit detail (empty string).
+- "detail": one clean, well-written sentence summarizing the task in plain language. Fix spelling/grammar; keep product names and important numbers (Plaid, Creditsafe, VRP, CCJ, £7,500). If the note is only a couple of words, you may omit detail (empty string).
+- "points": A MAXIMUM of 4 short bullet points (fewer is fine; use [] if the title/detail already says it all). Write them so even a NON-TECHNICAL person (a manager, a salesperson) understands — focus on what it does and why it matters, NOT how it is coded. Avoid jargon, class names, and internal library names; translate technical work into plain outcomes. Keep each point under ~12 words.
 - 1-8 tasks, ordered most important first.
 "role": a short role line ONLY if clearly stated (e.g. "the open banking guy"), else null. "eyebrow": a short status label ONLY if clearly implied (e.g. "Our Newest Team Member"), else null.
 Return ONLY the JSON object.`;
@@ -141,11 +150,12 @@ export async function formatCategorized(
       messages: [
         {
           role: "system",
-          content: `You turn ${name}'s rough weekly notes into polished slide tasks for "Sigma Lending". You receive up to three buckets: "Delivered", "In review", "In progress". Do NOT copy text verbatim — restructure it.
-Return STRICT JSON: {"tasks": [{"title": string, "detail": string}]}.
+          content: `You turn ${name}'s rough weekly notes into polished slide tasks for "Sigma Lending". You receive up to three buckets: "Delivered", "In review", "In progress". Do NOT copy text verbatim — restructure and condense it.
+Return STRICT JSON: {"tasks": [{"title": string, "detail": string, "points": string[]}]}.
 For each distinct piece of work:
 - "title": a short headline YOU write (3-6 words, Title Case), PREFIXED with its bucket, e.g. "Delivered: Video Call Template" or "In review: Broker Commissions".
-- "detail": one clean sentence describing it; fix grammar, keep technical terms, product names, and numbers (Plaid, Creditsafe, VRP, CCJ, £7,500). Omit (empty string) if the note is just a couple of words.
+- "detail": one clean sentence summarizing it; fix grammar, keep product names and important numbers (Plaid, Creditsafe, VRP, CCJ, £7,500). Omit (empty string) if the note is just a couple of words.
+- "points": a MAXIMUM of 4 short bullet points (fewer is fine; [] if not needed) written so even a NON-TECHNICAL person understands — plain outcomes, no jargon or code names. Keep each under ~12 words.
 - Order: Delivered first, then In review, then In progress. 1-8 tasks total.
 Return ONLY the JSON object.`,
         },

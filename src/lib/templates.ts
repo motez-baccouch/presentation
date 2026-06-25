@@ -201,8 +201,11 @@ export function buildTitleSlide(opts: {
 // full header (less room); continuation pages have a slim header (more room).
 const TITLE_FONT = 23;
 const DETAIL_FONT = 17;
+const POINT_FONT = 16;
 const TASK_GAP = 18;
 const DETAIL_GAP = 4;
+const POINT_GAP = 3;
+const POINT_INDENT = 20;
 const AREA_BOTTOM = 600;
 const PAGE1_TOP = 320;
 const CONT_TOP = 248;
@@ -211,11 +214,25 @@ function rows(text: string, charsPerLine: number): number {
   return Math.max(1, Math.ceil(text.length / charsPerLine));
 }
 
+function titleChars(textW: number): number {
+  return Math.max(16, Math.floor(textW / (TITLE_FONT * 0.55)));
+}
+function detailChars(textW: number): number {
+  return Math.max(20, Math.floor(textW / (DETAIL_FONT * 0.52)));
+}
+function pointChars(textW: number): number {
+  return Math.max(20, Math.floor((textW - POINT_INDENT) / (POINT_FONT * 0.52)));
+}
+
 function taskHeight(task: SlideTask, textW: number): number {
-  const titleCpl = Math.max(16, Math.floor(textW / (TITLE_FONT * 0.55)));
-  const detailCpl = Math.max(20, Math.floor(textW / (DETAIL_FONT * 0.52)));
-  let h = rows(task.title, titleCpl) * (TITLE_FONT * 1.2);
-  if (task.detail) h += DETAIL_GAP + rows(task.detail, detailCpl) * (DETAIL_FONT * 1.3);
+  let h = rows(task.title, titleChars(textW)) * (TITLE_FONT * 1.2);
+  if (task.detail)
+    h += DETAIL_GAP + rows(task.detail, detailChars(textW)) * (DETAIL_FONT * 1.3);
+  if (task.points?.length) {
+    for (const p of task.points) {
+      h += POINT_GAP + rows(p, pointChars(textW)) * (POINT_FONT * 1.3);
+    }
+  }
   return h + TASK_GAP;
 }
 
@@ -279,7 +296,9 @@ function personPage(
       : { textX: 96, textW: 640, markerX: 64, avatarX: 858, blobX: 815 };
 
   const areaTop = isCont ? CONT_TOP : PAGE1_TOP;
-  const titleCpl = Math.max(16, Math.floor(geo.textW / (TITLE_FONT * 0.55)));
+  const titleCpl = titleChars(geo.textW);
+  const detailCpl = detailChars(geo.textW);
+  const pointCpl = pointChars(geo.textW);
 
   const elements: SlideElement[] = [];
 
@@ -372,10 +391,11 @@ function personPage(
     );
   }
 
-  // tasks (packed): bold title + optional detail line
+  // tasks (packed): bold title + optional detail line + optional points
   let y = areaTop;
   for (const t of page.tasks) {
     const hasDetail = !!t.detail;
+    const isHeading = hasDetail || !!t.points?.length;
     elements.push(
       shape({
         kind: "rect",
@@ -396,23 +416,24 @@ function personPage(
         x: geo.textX,
         y,
         w: geo.textW,
-        fontFamily: hasDetail ? DISPLAY : SANS,
+        fontFamily: isHeading ? DISPLAY : SANS,
         fontSize: TITLE_FONT,
-        fontWeight: hasDetail ? 700 : 400,
+        fontWeight: isHeading ? 700 : 400,
         lineHeight: 1.2,
         color: INK,
         anim: "up",
         z: 6,
       }),
     );
-    const titleH = rows(t.title, titleCpl) * (TITLE_FONT * 1.2);
+    // cursor that walks down through the title, detail, then each point
+    let ty = y + rows(t.title, titleCpl) * (TITLE_FONT * 1.2);
     if (t.detail) {
       elements.push(
         text({
           text: t.detail,
           role: "body",
           x: geo.textX,
-          y: y + titleH + DETAIL_GAP,
+          y: ty + DETAIL_GAP,
           w: geo.textW,
           fontSize: DETAIL_FONT,
           fontWeight: 400,
@@ -422,6 +443,27 @@ function personPage(
           z: 6,
         }),
       );
+      ty += DETAIL_GAP + rows(t.detail, detailCpl) * (DETAIL_FONT * 1.3);
+    }
+    // up to 4 plain-language points, rendered as indented bullets
+    for (const p of t.points ?? []) {
+      ty += POINT_GAP;
+      elements.push(
+        text({
+          text: `•  ${p}`,
+          role: "body",
+          x: geo.textX + POINT_INDENT,
+          y: ty,
+          w: geo.textW - POINT_INDENT,
+          fontSize: POINT_FONT,
+          fontWeight: 400,
+          lineHeight: 1.3,
+          color: "#6b5836",
+          anim: "up",
+          z: 6,
+        }),
+      );
+      ty += rows(p, pointCpl) * (POINT_FONT * 1.3);
     }
     y += taskHeight(t, geo.textW);
   }

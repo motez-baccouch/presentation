@@ -22,6 +22,10 @@ function wrapperStyle(el: SlideElement): CSSProperties {
   if (el.type === "image" || el.type === "shape" || el.type === "video")
     base.height = el.h;
   if (el.type === "text" && el.h) base.height = el.h;
+  if (el.rotation) {
+    base.transform = `rotate(${el.rotation}deg)`;
+    base.transformOrigin = "center";
+  }
   return base;
 }
 

@@ -45,6 +45,43 @@ export function Editor({
   const refreshKnownRef = useRef<() => Promise<void>>(async () => {});
   const [deckChanged, setDeckChanged] = useState(false);
 
+  // ---- undo / redo history -----------------------------------------------
+  // Snapshots are whole `slides` arrays. All mutations are immutable (new
+  // arrays + new document objects), so a stored reference is a frozen snapshot.
+  // History only tracks document edits; structural ops (add/remove/reorder
+  // slides) reset it so undo can never resurrect a server-deleted slide.
+  const past = useRef<SlideData[][]>([]);
+  const future = useRef<SlideData[][]>([]);
+  const lastEditAt = useRef(0);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const HISTORY_LIMIT = 100;
+  const COALESCE_MS = 500;
+
+  const syncHist = useCallback(() => {
+    setCanUndo(past.current.length > 0);
+    setCanRedo(future.current.length > 0);
+  }, []);
+
+  const resetHistory = useCallback(() => {
+    past.current = [];
+    future.current = [];
+    lastEditAt.current = 0;
+    syncHist();
+  }, [syncHist]);
+
+  // Capture the pre-edit state, coalescing bursts (e.g. a drag) into one step.
+  const pushHistory = useCallback(() => {
+    const now = Date.now();
+    if (now - lastEditAt.current > COALESCE_MS) {
+      past.current.push(slidesRef.current);
+      if (past.current.length > HISTORY_LIMIT) past.current.shift();
+      future.current = [];
+      syncHist();
+    }
+    lastEditAt.current = now;
+  }, [syncHist]);
+
   const current = slides[Math.min(index, slides.length - 1)];
   const selected = useMemo(
     () => current?.document.elements.find((e) => e.id === selectedId) ?? null,
@@ -72,8 +109,9 @@ export function Editor({
     setIndex((i) => Math.min(i, deck.slides.length - 1));
     setSelectedId(null);
     setDeckChanged(false);
+    resetHistory();
     await refreshKnownRef.current();
-  }, []);
+  }, [resetHistory]);
 
   const { refreshKnown } = useDeckVersion(() => setDeckChanged(true));
   refreshKnownRef.current = refreshKnown;
@@ -132,6 +170,7 @@ export function Editor({
   // ---- document mutations -------------------------------------------------
   const mutateDoc = useCallback(
     (slideId: string, updater: (doc: SlideDocument) => SlideDocument) => {
+      pushHistory();
       setSlides((prev) =>
         prev.map((s) =>
           s.id === slideId ? { ...s, document: updater(s.document) } : s,
@@ -139,8 +178,66 @@ export function Editor({
       );
       markDirty(slideId);
     },
-    [markDirty],
+    [markDirty, pushHistory],
   );
+
+  // Restore a history snapshot and persist whichever slides' documents changed.
+  const applyHistory = useCallback((target: SlideData[]) => {
+    const currById = new Map(slidesRef.current.map((s) => [s.id, s]));
+    for (const s of target) {
+      const before = currById.get(s.id);
+      if (!before || before.document !== s.document) dirty.current.add(s.id);
+    }
+    setSlides(target);
+    slidesRef.current = target;
+    setSelectedId(null);
+    lastEditAt.current = 0;
+    setSaveState("saving");
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(flush, 300);
+  }, [flush]);
+
+  const undo = useCallback(() => {
+    const prev = past.current.pop();
+    if (!prev) return;
+    future.current.push(slidesRef.current);
+    applyHistory(prev);
+    syncHist();
+  }, [applyHistory, syncHist]);
+
+  const redo = useCallback(() => {
+    const next = future.current.pop();
+    if (!next) return;
+    past.current.push(slidesRef.current);
+    applyHistory(next);
+    syncHist();
+  }, [applyHistory, syncHist]);
+
+  // keyboard: Ctrl/Cmd+Z = undo, Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z = redo
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      // let inputs / textareas / inline text editing keep their native undo
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      )
+        return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (k === "y" || (k === "z" && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
 
   const updateElement = useCallback(
     (elId: string, patch: Partial<SlideElement>) => {
@@ -208,19 +305,24 @@ export function Editor({
     });
     setIndex((i) => i + 1);
     setSelectedId(null);
-  }, [current]);
+    resetHistory();
+  }, [current, resetHistory]);
 
-  const duplicateSlide = useCallback(async (id: string) => {
-    const res = await fetch(`/api/slides/${id}/duplicate`, { method: "POST" });
-    if (!res.ok) return;
-    const slide: SlideData = await res.json();
-    setSlides((prev) => {
-      const at = prev.findIndex((s) => s.id === id);
-      const next = [...prev];
-      next.splice(at + 1, 0, slide);
-      return next;
-    });
-  }, []);
+  const duplicateSlide = useCallback(
+    async (id: string) => {
+      const res = await fetch(`/api/slides/${id}/duplicate`, { method: "POST" });
+      if (!res.ok) return;
+      const slide: SlideData = await res.json();
+      setSlides((prev) => {
+        const at = prev.findIndex((s) => s.id === id);
+        const next = [...prev];
+        next.splice(at + 1, 0, slide);
+        return next;
+      });
+      resetHistory();
+    },
+    [resetHistory],
+  );
 
   const removeSlide = useCallback(
     async (id: string) => {
@@ -229,8 +331,9 @@ export function Editor({
       setSlides((prev) => prev.filter((s) => s.id !== id));
       setIndex((i) => Math.max(0, Math.min(i, slides.length - 2)));
       setSelectedId(null);
+      resetHistory();
     },
-    [slides.length],
+    [slides.length, resetHistory],
   );
 
   const [summarizing, setSummarizing] = useState(false);
@@ -245,10 +348,11 @@ export function Editor({
       const summaryIdx = deck.slides.findIndex((s) => s.type === "SUMMARY");
       if (summaryIdx >= 0) setIndex(summaryIdx);
       setSelectedId(null);
+      resetHistory();
     } finally {
       setSummarizing(false);
     }
-  }, []);
+  }, [resetHistory]);
 
   const [posting, setPosting] = useState(false);
   const postToSlack = useCallback(async () => {
@@ -278,7 +382,8 @@ export function Editor({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ orderedIds }),
     });
-  }, []);
+    resetHistory();
+  }, [resetHistory]);
 
   if (!current) return null;
 
@@ -309,6 +414,26 @@ export function Editor({
                 ? "All changes saved"
                 : ""}
           </span>
+          <div className="flex items-center">
+            <button
+              onClick={undo}
+              disabled={!canUndo}
+              title="Undo (Ctrl+Z)"
+              aria-label="Undo"
+              className="rounded-full px-2.5 py-1.5 text-base text-sigma-ink transition hover:bg-sigma-sand disabled:opacity-30"
+            >
+              ↶
+            </button>
+            <button
+              onClick={redo}
+              disabled={!canRedo}
+              title="Redo (Ctrl+Y)"
+              aria-label="Redo"
+              className="rounded-full px-2.5 py-1.5 text-base text-sigma-ink transition hover:bg-sigma-sand disabled:opacity-30"
+            >
+              ↷
+            </button>
+          </div>
           <button
             onClick={regenerateSummary}
             disabled={summarizing}
@@ -372,6 +497,7 @@ export function Editor({
           othersHere={othersHere}
           onSelect={setSelectedId}
           onUpdateElement={updateElement}
+          onDeleteElement={deleteElement}
         />
 
         <Inspector

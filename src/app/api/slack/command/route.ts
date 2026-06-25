@@ -114,7 +114,12 @@ export async function POST(req: Request) {
         await upsertPersonSlides(member.key, documents);
         const link = `${base}/edit?slide=${member.key}`;
         const bulletList = formatted.tasks
-          .map((t) => `  • ${t.title}`)
+          .map((t) => {
+            const points = (t.points ?? [])
+              .map((p) => `      ◦ ${p}`)
+              .join("\n");
+            return points ? `  • ${t.title}\n${points}` : `  • ${t.title}`;
+          })
           .join("\n");
         await respond(
           responseUrl,
