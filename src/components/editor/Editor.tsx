@@ -370,6 +370,32 @@ export function Editor({
     }
   }, []);
 
+  const [downloading, setDownloading] = useState(false);
+  const downloadSummary = useCallback(async () => {
+    setDownloading(true);
+    try {
+      // make sure pending edits are saved so the image matches the deck
+      await flush();
+      const res = await fetch(`/api/og/summary?t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error("render failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "sigma-weekly-summary.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("⚠️ Couldn't generate the summary image. Try again.");
+    } finally {
+      setDownloading(false);
+    }
+  }, [flush]);
+
   const reorder = useCallback((orderedIds: string[]) => {
     setSlides((prev) => {
       const map = new Map(prev.map((s) => [s.id, s]));
@@ -440,6 +466,14 @@ export function Editor({
             className="rounded-full border border-sigma-ink/15 px-4 py-1.5 font-semibold text-sigma-ink transition hover:bg-sigma-sand disabled:opacity-60"
           >
             {summarizing ? "Summarizing…" : "✨ AI summary"}
+          </button>
+          <button
+            onClick={downloadSummary}
+            disabled={downloading}
+            title="Download this week's summary as an image"
+            className="rounded-full border border-sigma-ink/15 px-4 py-1.5 font-semibold text-sigma-ink transition hover:bg-sigma-sand disabled:opacity-60"
+          >
+            {downloading ? "Preparing…" : "⬇ Download summary"}
           </button>
           <button
             onClick={postToSlack}

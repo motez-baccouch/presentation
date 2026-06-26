@@ -73,22 +73,22 @@ export async function formatUpdate(
   const groq = client();
   if (!groq) return { role: null, eyebrow: null, tasks: naiveTasks(raw) };
 
-  const system = `You are a sharp editor turning a software developer's rough weekly notes (often a long PR description) into a polished presentation slide for the company "Sigma Lending". Do NOT copy their text verbatim — restructure and CONDENSE it. A PR description may be long; your job is to boil it down.
+  const system = `You are a careful copy-editor tidying a software developer's rough weekly notes (often a PR description) into a presentation slide for the company "Sigma Lending". Your job is to ASSIST, not rewrite: keep the person's own wording, meaning, and level of detail. Fix spelling, grammar, and punctuation, make it read cleanly, and organize it into tasks — but do NOT reword aggressively, summarize away content, or invent things they didn't say.
 Return STRICT JSON: {"role": string|null, "eyebrow": string|null, "tasks": [{"title": string, "detail": string, "points": string[]}]}
 
 Rules for "tasks":
-- Identify each DISTINCT piece of work and make it one task. Merge fragments that belong together; split things that don't.
-- "title": a short, punchy headline you write yourself (3-6 words, Title Case), even if the person didn't give one. E.g. "Open Banking PR", "Plaid Connection Fix", "Creditsafe Dedupe".
-- "detail": one clean, well-written sentence summarizing the task in plain language. Fix spelling/grammar; keep product names and important numbers (Plaid, Creditsafe, VRP, CCJ, £7,500). If the note is only a couple of words, you may omit detail (empty string).
-- "points": A MAXIMUM of 4 short bullet points (fewer is fine; use [] if the title/detail already says it all). Write them so even a NON-TECHNICAL person (a manager, a salesperson) understands — focus on what it does and why it matters, NOT how it is coded. Avoid jargon, class names, and internal library names; translate technical work into plain outcomes. Keep each point under ~12 words.
-- 1-8 tasks, ordered most important first.
+- Identify each DISTINCT piece of work and make it one task. Merge fragments that clearly belong together; split things that don't.
+- "title": a short headline (3-6 words, Title Case) naming the task, even if the person didn't give one. E.g. "Open Banking PR", "Plaid Connection Fix", "Creditsafe Dedupe".
+- "detail": an optional one-line summary in the person's own words with grammar fixed (empty string if the points already cover it).
+- "points": up to 4 bullet points (MAX 4; fewer is fine, use [] if not needed) carrying what they actually wrote. Keep their wording and detail — only fix grammar and lightly clarify so each reads cleanly. Points may be as long as they need to be; do NOT truncate or strip meaning. Keep technical terms, product names, and numbers exactly (Plaid, Creditsafe, VRP, CCJ, £7,500).
+- 1-8 tasks, kept in the order the person listed them.
 "role": a short role line ONLY if clearly stated (e.g. "the open banking guy"), else null. "eyebrow": a short status label ONLY if clearly implied (e.g. "Our Newest Team Member"), else null.
 Return ONLY the JSON object.`;
 
   try {
     const completion = await groq.chat.completions.create({
       model: MODEL,
-      temperature: 0.35,
+      temperature: 0.2,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
@@ -115,6 +115,27 @@ export interface CategoryInput {
   inProgress?: string;
 }
 
+function categorySections(cats: CategoryInput): [string, string][] {
+  return [
+    ["Delivered", cats.delivered ?? ""],
+    ["In review", cats.inReview ?? ""],
+    ["In progress", cats.inProgress ?? ""],
+  ].filter(([, v]) => v && v.trim()) as [string, string][];
+}
+
+/**
+ * No-AI path: keep exactly what the teammate typed, just split into bullets and
+ * prefix each with its bucket. Used when "AI assist" is unticked in the modal,
+ * and as the fallback when Groq isn't configured.
+ */
+export function categorizeVerbatim(cats: CategoryInput): SlideTask[] {
+  const out: SlideTask[] = [];
+  for (const [label, txt] of categorySections(cats)) {
+    for (const b of naiveBullets(txt)) out.push({ title: `${label}: ${b}` });
+  }
+  return out;
+}
+
 /**
  * Turn the three modal boxes (Delivered / In Review / In Progress) into clean
  * title/detail tasks, each title prefixed with its status so both the slide and
@@ -124,20 +145,10 @@ export async function formatCategorized(
   name: string,
   cats: CategoryInput,
 ): Promise<SlideTask[]> {
-  const sections: [string, string][] = [
-    ["Delivered", cats.delivered ?? ""],
-    ["In review", cats.inReview ?? ""],
-    ["In progress", cats.inProgress ?? ""],
-  ].filter(([, v]) => v && v.trim()) as [string, string][];
+  const sections = categorySections(cats);
   if (!sections.length) return [];
 
-  const naive = (): SlideTask[] => {
-    const out: SlideTask[] = [];
-    for (const [label, txt] of sections) {
-      for (const b of naiveBullets(txt)) out.push({ title: `${label}: ${b}` });
-    }
-    return out;
-  };
+  const naive = (): SlideTask[] => categorizeVerbatim(cats);
 
   const groq = client();
   if (!groq) return naive();
@@ -145,17 +156,17 @@ export async function formatCategorized(
   try {
     const completion = await groq.chat.completions.create({
       model: MODEL,
-      temperature: 0.35,
+      temperature: 0.2,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content: `You turn ${name}'s rough weekly notes into polished slide tasks for "Sigma Lending". You receive up to three buckets: "Delivered", "In review", "In progress". Do NOT copy text verbatim — restructure and condense it.
+          content: `You tidy up ${name}'s rough weekly notes into slide tasks for "Sigma Lending". You receive up to three buckets: "Delivered", "In review", "In progress". ASSIST, don't rewrite: keep their wording, meaning, and detail; fix spelling/grammar and organize it — do NOT reword aggressively, summarize away content, or invent things they didn't say.
 Return STRICT JSON: {"tasks": [{"title": string, "detail": string, "points": string[]}]}.
 For each distinct piece of work:
-- "title": a short headline YOU write (3-6 words, Title Case), PREFIXED with its bucket, e.g. "Delivered: Video Call Template" or "In review: Broker Commissions".
-- "detail": one clean sentence summarizing it; fix grammar, keep product names and important numbers (Plaid, Creditsafe, VRP, CCJ, £7,500). Omit (empty string) if the note is just a couple of words.
-- "points": a MAXIMUM of 4 short bullet points (fewer is fine; [] if not needed) written so even a NON-TECHNICAL person understands — plain outcomes, no jargon or code names. Keep each under ~12 words.
+- "title": a short headline (3-6 words, Title Case), PREFIXED with its bucket, e.g. "Delivered: Video Call Template" or "In review: Broker Commissions".
+- "detail": an optional one-line summary in their own words with grammar fixed (empty string if the points already cover it).
+- "points": up to 4 bullet points (MAX 4; fewer is fine, [] if not needed) carrying what they actually wrote — keep their wording and detail, only fix grammar and lightly clarify. Points may be as long as they need to be; don't truncate meaning. Keep technical terms, product names, and numbers exactly (Plaid, Creditsafe, VRP, CCJ, £7,500).
 - Order: Delivered first, then In review, then In progress. 1-8 tasks total.
 Return ONLY the JSON object.`,
         },

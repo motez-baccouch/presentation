@@ -23,7 +23,13 @@ function base(req: Request): string {
 export async function GET(req: Request) {
   const origin = base(req);
   const deck = await getPresentation();
-  const items = naiveCategorize(collectUpdates(deck.slides));
+  // Mirror the deck's actual SUMMARY slide (AI-categorised or hand-tuned).
+  // Fall back to the heuristic for decks whose summary predates this field.
+  const summarySlide = deck.slides.find((s) => s.type === "SUMMARY");
+  const items =
+    summarySlide?.document.summary?.length
+      ? summarySlide.document.summary
+      : naiveCategorize(collectUpdates(deck.slides));
 
   return new ImageResponse(
     (

@@ -45,6 +45,16 @@ export function appUrl(req: Request): string {
   return `${url.protocol}//${url.host}`;
 }
 
+// The single "AI assist" toggle. Pre-checked so the default stays AI-cleaned.
+const AI_ASSIST_OPTION = {
+  text: { type: "plain_text", text: "✨ Let AI clean up & summarize my notes" },
+  description: {
+    type: "plain_text",
+    text: "Untick to keep your exact words, just turned into bullet points.",
+  },
+  value: "ai",
+};
+
 /** The /presentation modal: teammate dropdown + a box per status. */
 export function buildPresentationModal() {
   return {
@@ -102,6 +112,18 @@ export function buildPresentationModal() {
           action_id: "v",
           multiline: true,
           placeholder: { type: "plain_text", text: "What you're working on…" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "ai_assist",
+        optional: true,
+        label: { type: "plain_text", text: "Formatting" },
+        element: {
+          type: "checkboxes",
+          action_id: "ai",
+          initial_options: [AI_ASSIST_OPTION],
+          options: [AI_ASSIST_OPTION],
         },
       },
     ],

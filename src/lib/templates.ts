@@ -686,7 +686,8 @@ export function buildSummarySlide(
     }
   });
 
-  return { background: { kind: "mesh" }, elements };
+  // keep the structured items on the doc so the OG/download image matches.
+  return { background: { kind: "mesh" }, elements, summary: items };
 }
 
 export function buildThankYouSlide(): SlideDocument {

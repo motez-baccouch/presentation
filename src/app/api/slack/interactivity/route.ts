@@ -1,7 +1,7 @@
 import { NextResponse, after } from "next/server";
 import { verifySlack, slackApi, appUrl } from "@/lib/slack";
 import { getMember } from "@/lib/team";
-import { formatCategorized } from "@/lib/groq";
+import { formatCategorized, categorizeVerbatim } from "@/lib/groq";
 import { buildPersonSlides } from "@/lib/templates";
 import { upsertPersonSlides } from "@/lib/db";
 
@@ -10,6 +10,7 @@ export const runtime = "nodejs";
 interface ViewValue {
   value?: string;
   selected_option?: { value?: string };
+  selected_options?: { value?: string }[];
 }
 
 export async function POST(req: Request) {
@@ -35,6 +36,8 @@ export async function POST(req: Request) {
     const delivered = v?.delivered?.v?.value ?? "";
     const inReview = v?.in_review?.v?.value ?? "";
     const inProgress = v?.in_progress?.v?.value ?? "";
+    // checkbox is pre-checked, so AI is on unless the user explicitly unticks it
+    const useAi = !!v?.ai_assist?.ai?.selected_options?.length;
     const userId = payload.user?.id;
     const member = personKey ? getMember(personKey) : undefined;
 
@@ -54,11 +57,10 @@ export async function POST(req: Request) {
     const base = appUrl(req);
     after(async () => {
       try {
-        const tasks = await formatCategorized(member.name, {
-          delivered,
-          inReview,
-          inProgress,
-        });
+        const cats = { delivered, inReview, inProgress };
+        const tasks = useAi
+          ? await formatCategorized(member.name, cats)
+          : categorizeVerbatim(cats);
         const documents = buildPersonSlides(member, { tasks });
         await upsertPersonSlides(member.key, documents);
         if (userId) {

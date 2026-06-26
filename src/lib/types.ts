@@ -107,6 +107,12 @@ export interface SlideBackground {
 export interface SlideDocument {
   background: SlideBackground;
   elements: SlideElement[];
+  /**
+   * For SUMMARY slides only: the structured status-board items this slide was
+   * built from, so the shared/downloaded image can mirror the deck exactly
+   * instead of re-deriving them heuristically.
+   */
+  summary?: SummaryItem[];
 }
 
 export interface SlideData {
