@@ -543,7 +543,12 @@ function personPage(
       ? ({ kind: "mesh" } as const)
       : ({ kind: "solid", color: "#fff8ea" } as const);
 
-  return { background, elements };
+  // keep this page's source tasks on the doc so it can be re-tidied / rewritten
+  return {
+    background,
+    elements,
+    person: { role: data.role, eyebrow: data.eyebrow, tasks: page.tasks },
+  };
 }
 
 /** Build one or more slides for a person, splitting long updates across pages. */

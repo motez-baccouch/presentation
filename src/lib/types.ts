@@ -113,6 +113,12 @@ export interface SlideDocument {
    * instead of re-deriving them heuristically.
    */
   summary?: SummaryItem[];
+  /**
+   * For PERSON slides only: the role/eyebrow and the tasks rendered on THIS
+   * page. Lets the editor re-tidy (re-paginate) or AI-rewrite a member without
+   * re-parsing the rendered elements.
+   */
+  person?: { role?: string; eyebrow?: string; tasks: SlideTask[] };
 }
 
 export interface SlideData {

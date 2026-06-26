@@ -465,6 +465,40 @@ export function Editor({
     }
   }, [resetHistory]);
 
+  // tidy (re-paginate) or rewrite (re-run AI) the current member's slides
+  const [organizing, setOrganizing] = useState<null | "tidy" | "rewrite">(null);
+  const organizeMember = useCallback(
+    async (action: "tidy" | "rewrite") => {
+      const key = current?.type === "PERSON" ? current.personKey : null;
+      if (!key) return;
+      setOrganizing(action);
+      try {
+        await flush(); // persist any pending edits first
+        const res = await fetch(`/api/person/${key}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(`⚠️ ${data.error ?? "Couldn't update the slide."}`);
+          return;
+        }
+        const deck: PresentationData = await (
+          await fetch("/api/presentation", { cache: "no-store" })
+        ).json();
+        setSlides(deck.slides);
+        const idx = deck.slides.findIndex((s) => s.personKey === key);
+        if (idx >= 0) setIndex(idx);
+        setSelectedIds([]);
+        resetHistory();
+      } finally {
+        setOrganizing(null);
+      }
+    },
+    [current, flush, resetHistory],
+  );
+
   const [posting, setPosting] = useState(false);
   const postToSlack = useCallback(async () => {
     setPosting(true);
@@ -571,6 +605,26 @@ export function Editor({
               ↷
             </button>
           </div>
+          {current.type === "PERSON" && current.personKey && (
+            <>
+              <button
+                onClick={() => organizeMember("tidy")}
+                disabled={!!organizing}
+                title="Re-pack this member's pages (fewer pages, less white space)"
+                className="rounded-full border border-sigma-ink/15 px-4 py-1.5 font-semibold text-sigma-ink transition hover:bg-sigma-sand disabled:opacity-60"
+              >
+                {organizing === "tidy" ? "Tidying…" : "🧹 Tidy pages"}
+              </button>
+              <button
+                onClick={() => organizeMember("rewrite")}
+                disabled={!!organizing}
+                title="Re-run the AI to rewrite this member's slide"
+                className="rounded-full border border-sigma-ink/15 px-4 py-1.5 font-semibold text-sigma-ink transition hover:bg-sigma-sand disabled:opacity-60"
+              >
+                {organizing === "rewrite" ? "Rewriting…" : "✨ Rewrite member"}
+              </button>
+            </>
+          )}
           <button
             onClick={regenerateSummary}
             disabled={summarizing}

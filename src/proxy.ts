@@ -18,6 +18,7 @@ export async function proxy(req: NextRequest) {
   // Gate write/AI/upload APIs (reads stay public).
   const isProtectedApi =
     pathname.startsWith("/api/slides") ||
+    pathname.startsWith("/api/person") ||
     pathname.startsWith("/api/upload") ||
     pathname.startsWith("/api/summary") ||
     pathname.startsWith("/api/presence") ||
@@ -36,6 +37,7 @@ export const config = {
     "/edit/:path*",
     "/api/slides",
     "/api/slides/:path*",
+    "/api/person/:path*",
     "/api/upload",
     "/api/summary/:path*",
     "/api/presence",
