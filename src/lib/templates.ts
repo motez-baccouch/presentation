@@ -202,13 +202,24 @@ export function buildTitleSlide(opts: {
 const TITLE_FONT = 23;
 const DETAIL_FONT = 17;
 const POINT_FONT = 16;
-const TASK_GAP = 18;
+const SECTION_FONT = 17;
+const TASK_GAP = 16;
 const DETAIL_GAP = 4;
 const POINT_GAP = 3;
 const POINT_INDENT = 20;
+const SECTION_GAP_BEFORE = 16;
+const SECTION_GAP_AFTER = 10;
+const SECTION_H = SECTION_GAP_BEFORE + SECTION_FONT * 1.2 + SECTION_GAP_AFTER;
 const AREA_BOTTOM = 600;
 const PAGE1_TOP = 320;
 const CONT_TOP = 248;
+
+// One heading per status bucket, shown once above its tasks.
+const SECTION_LABELS: Record<string, string> = {
+  Delivered: "✅ Delivered",
+  "In review": "👀 In Review",
+  "In progress": "🔨 In Progress",
+};
 
 function rows(text: string, charsPerLine: number): number {
   return Math.max(1, Math.ceil(text.length / charsPerLine));
@@ -224,8 +235,13 @@ function pointChars(textW: number): number {
   return Math.max(20, Math.floor((textW - POINT_INDENT) / (POINT_FONT * 0.52)));
 }
 
-function taskHeight(task: SlideTask, textW: number): number {
-  let h = rows(task.title, titleChars(textW)) * (TITLE_FONT * 1.2);
+function taskHeight(
+  task: SlideTask,
+  textW: number,
+  startsSection = false,
+): number {
+  let h = startsSection ? SECTION_H : 0;
+  h += rows(task.title, titleChars(textW)) * (TITLE_FONT * 1.2);
   if (task.detail)
     h += DETAIL_GAP + rows(task.detail, detailChars(textW)) * (DETAIL_FONT * 1.3);
   if (task.points?.length) {
@@ -260,16 +276,21 @@ function paginate(tasks: SlideTask[], textW: number): SlideTask[][] {
   let cur: SlideTask[] = [];
   let used = 0;
   let cap = page1Cap;
+  let prevSection: string | undefined;
   for (const t of tasks) {
-    const h = taskHeight(t, textW);
+    const startsSection = !!t.section && t.section !== prevSection;
+    const h = taskHeight(t, textW, startsSection);
     if (cur.length && used + h > cap) {
       pages.push(cur);
       cur = [];
       used = 0;
       cap = contCap;
+      prevSection = undefined; // re-show the section heading atop the new page
     }
     cur.push(t);
-    used += h;
+    // first task on a fresh page always re-emits its heading
+    used += taskHeight(t, textW, !!t.section && t.section !== prevSection);
+    prevSection = t.section;
   }
   if (cur.length) pages.push(cur);
   return pages.length ? pages : [[{ title: "Add what you worked on this week." }]];
@@ -391,9 +412,32 @@ function personPage(
     );
   }
 
-  // tasks (packed): bold title + optional detail line + optional points
+  // tasks (packed): optional section heading, then bold title + detail + points
   let y = areaTop;
+  let renderedSection: string | undefined;
   for (const t of page.tasks) {
+    if (t.section && t.section !== renderedSection) {
+      y += SECTION_GAP_BEFORE;
+      elements.push(
+        text({
+          text: SECTION_LABELS[t.section] ?? t.section,
+          role: "eyebrow",
+          x: geo.textX,
+          y,
+          w: geo.textW,
+          fontFamily: DISPLAY,
+          fontSize: SECTION_FONT,
+          fontWeight: 800,
+          letterSpacing: 2,
+          color: member.accent,
+          uppercase: true,
+          anim: "left",
+          z: 6,
+        }),
+      );
+      y += SECTION_FONT * 1.2 + SECTION_GAP_AFTER;
+      renderedSection = t.section;
+    }
     const hasDetail = !!t.detail;
     const isHeading = hasDetail || !!t.points?.length;
     elements.push(
@@ -465,7 +509,8 @@ function personPage(
       );
       ty += rows(p, pointCpl) * (POINT_FONT * 1.3);
     }
-    y += taskHeight(t, geo.textW);
+    // section heading height (if any) was already advanced above
+    y += taskHeight(t, geo.textW, false);
   }
 
   // page pill when multi-page

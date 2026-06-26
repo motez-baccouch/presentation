@@ -10,7 +10,7 @@ import {
   SlideElement,
   SlideBackground,
 } from "@/lib/types";
-import { buildBlankSlide } from "@/lib/templates";
+import { buildBlankSlide, genId } from "@/lib/templates";
 import { SlideRail } from "./SlideRail";
 import { EditorCanvas } from "./EditorCanvas";
 import { Inspector } from "./Inspector";
@@ -19,6 +19,16 @@ import { NamePrompt, PresencePills } from "./Presence";
 import { useDeckVersion } from "../useDeckVersion";
 
 type SaveState = "idle" | "saving" | "saved";
+
+/** Deep-clone an element with a fresh id, nudged by (dx, dy) like Canva paste. */
+function cloneElement(el: SlideElement, dx: number, dy: number): SlideElement {
+  return {
+    ...(JSON.parse(JSON.stringify(el)) as SlideElement),
+    id: genId(),
+    x: Math.round(el.x + dx),
+    y: Math.round(el.y + dy),
+  };
+}
 
 export function Editor({
   initial,
@@ -57,6 +67,10 @@ export function Editor({
   const [canRedo, setCanRedo] = useState(false);
   const HISTORY_LIMIT = 100;
   const COALESCE_MS = 500;
+
+  // Canva-style element clipboard (in-memory; persists across slides).
+  const clipboard = useRef<SlideElement | null>(null);
+  const pasteCount = useRef(0);
 
   const syncHist = useCallback(() => {
     setCanUndo(past.current.length > 0);
@@ -213,32 +227,6 @@ export function Editor({
     syncHist();
   }, [applyHistory, syncHist]);
 
-  // keyboard: Ctrl/Cmd+Z = undo, Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z = redo
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      // let inputs / textareas / inline text editing keep their native undo
-      const t = e.target as HTMLElement | null;
-      if (
-        t &&
-        (t.tagName === "INPUT" ||
-          t.tagName === "TEXTAREA" ||
-          t.isContentEditable)
-      )
-        return;
-      const k = e.key.toLowerCase();
-      if (k === "z" && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-      } else if (k === "y" || (k === "z" && e.shiftKey)) {
-        e.preventDefault();
-        redo();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
-
   const updateElement = useCallback(
     (elId: string, patch: Partial<SlideElement>) => {
       if (!current) return;
@@ -283,6 +271,56 @@ export function Editor({
     },
     [current, mutateDoc],
   );
+
+  // keyboard: undo/redo + Canva-style copy / cut / paste / duplicate of elements
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      // let inputs / textareas / inline text editing keep their native shortcuts
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      )
+        return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (k === "y" || (k === "z" && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      } else if (k === "c") {
+        if (selected) {
+          clipboard.current = JSON.parse(JSON.stringify(selected));
+          pasteCount.current = 0;
+          e.preventDefault();
+        }
+      } else if (k === "x") {
+        if (selected) {
+          clipboard.current = JSON.parse(JSON.stringify(selected));
+          pasteCount.current = 0;
+          deleteElement(selected.id);
+          e.preventDefault();
+        }
+      } else if (k === "v") {
+        if (clipboard.current) {
+          e.preventDefault();
+          const n = ++pasteCount.current;
+          addElement(cloneElement(clipboard.current, 24 * n, 24 * n));
+        }
+      } else if (k === "d") {
+        if (selected) {
+          e.preventDefault();
+          addElement(cloneElement(selected, 24, 24));
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo, selected, addElement, deleteElement]);
 
   // ---- structural (slide-level) ops --------------------------------------
   const addSlide = useCallback(async () => {

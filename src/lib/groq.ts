@@ -16,12 +16,37 @@ export interface FormattedUpdate {
   tasks: SlideTask[];
 }
 
-/** Naive fallback used when no GROQ_API_KEY is configured. */
-function naiveTasks(raw: string): SlideTask[] {
+// Lines that are obviously code-host UI chrome (from pasting a GitHub/GitLab PR
+// page) rather than real work notes. Dropped from the no-AI split so a pasted
+// PR doesn't turn into junk bullets like "#1502", "Open", "wants to merge…".
+function looksLikeNoise(s: string): boolean {
+  const t = s.trim();
+  if (t.length < 2) return true;
+  if (/^#\d+$/.test(t)) return true; // issue/PR number
+  if (/^[+-]?[\d,]+\s*(additions?|deletions?|changes?)?$/i.test(t)) return true; // diff stats
+  if (/^lines? changed/i.test(t)) return true;
+  if (/wants? to merge/i.test(t)) return true;
+  if (/^[+-][\d,]+$/.test(t)) return true; // +546 / -150
+  if (
+    /^(open|closed|merged|draft|conversation|commits?|checks?|files?(\s+changed)?|review required|approved)\s*\(?\d*\)?$/i.test(
+      t,
+    )
+  )
+    return true;
+  if (/^[\w.-]+\/[\w./-]+$/.test(t) && !/\s/.test(t)) return true; // branch / owner-repo path
+  return false;
+}
+
+function splitLines(raw: string): string[] {
   return raw
     .split(/\n|(?<=[.!?])\s+|•|^-\s|;\s/gm)
     .map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim())
-    .filter((l) => l.length > 1)
+    .filter((l) => l.length > 1 && !looksLikeNoise(l));
+}
+
+/** Naive fallback used when no GROQ_API_KEY is configured. */
+function naiveTasks(raw: string): SlideTask[] {
+  return splitLines(raw)
     .slice(0, 8)
     .map((l) => {
       // use the first few words as a title, the rest as detail
@@ -33,11 +58,7 @@ function naiveTasks(raw: string): SlideTask[] {
 
 /** Naive split into plain bullet strings (used by reformatToBullets). */
 function naiveBullets(raw: string): string[] {
-  return raw
-    .split(/\n|(?<=[.!?])\s+|•|^-\s|;\s/gm)
-    .map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim())
-    .filter((l) => l.length > 1)
-    .slice(0, 8);
+  return splitLines(raw).slice(0, 8);
 }
 
 function coerceTasks(arr: unknown): SlideTask[] {
@@ -45,9 +66,15 @@ function coerceTasks(arr: unknown): SlideTask[] {
   return arr
     .map((t) => {
       if (typeof t === "string") return { title: t.trim() };
-      const o = t as { title?: unknown; detail?: unknown; points?: unknown };
+      const o = t as {
+        title?: unknown;
+        detail?: unknown;
+        points?: unknown;
+        section?: unknown;
+      };
       const title = o.title ? String(o.title).trim() : "";
       const detail = o.detail ? String(o.detail).trim() : undefined;
+      const section = o.section ? String(o.section).trim() : undefined;
       const points = Array.isArray(o.points)
         ? o.points
             .map((p) => String(p).trim())
@@ -55,7 +82,7 @@ function coerceTasks(arr: unknown): SlideTask[] {
             .slice(0, 4) // never more than 4 points per task
         : undefined;
       return title
-        ? { title, detail, points: points?.length ? points : undefined }
+        ? { title, detail, section, points: points?.length ? points : undefined }
         : null;
     })
     .filter(Boolean) as SlideTask[];
@@ -73,22 +100,22 @@ export async function formatUpdate(
   const groq = client();
   if (!groq) return { role: null, eyebrow: null, tasks: naiveTasks(raw) };
 
-  const system = `You are a careful copy-editor tidying a software developer's rough weekly notes (often a PR description) into a presentation slide for the company "Sigma Lending". Your job is to ASSIST, not rewrite: keep the person's own wording, meaning, and level of detail. Fix spelling, grammar, and punctuation, make it read cleanly, and organize it into tasks — but do NOT reword aggressively, summarize away content, or invent things they didn't say.
-Return STRICT JSON: {"role": string|null, "eyebrow": string|null, "tasks": [{"title": string, "detail": string, "points": string[]}]}
+  const system = `You turn a developer's raw weekly notes — often pasted straight from a GitHub/GitLab pull request — into clean, presentation-ready slide tasks for the company "Sigma Lending". REWRITE freely: you do NOT need to keep their exact words. Distil the work into a clear title and tidy points. Your goal is a sharp, easy-to-read slide a non-technical teammate can follow.
+IGNORE code-host interface noise: PR/issue numbers (#1502), branch names (feature/...), usernames, "wants to merge N commits into …", "Open"/"Closed", "Conversation/Commits/Checks/Files changed", and "+546 −150" diff counts are NOT work items.
+Return STRICT JSON: {"role": string|null, "eyebrow": string|null, "tasks": [{"title": string, "points": string[]}]}
 
 Rules for "tasks":
-- Identify each DISTINCT piece of work and make it one task. Merge fragments that clearly belong together; split things that don't.
-- "title": a short headline (3-6 words, Title Case) naming the task, even if the person didn't give one. E.g. "Open Banking PR", "Plaid Connection Fix", "Creditsafe Dedupe".
-- "detail": an optional one-line summary in the person's own words with grammar fixed (empty string if the points already cover it).
-- "points": up to 4 bullet points (MAX 4; fewer is fine, use [] if not needed) carrying what they actually wrote. Keep their wording and detail — only fix grammar and lightly clarify so each reads cleanly. Points may be as long as they need to be; do NOT truncate or strip meaning. Keep technical terms, product names, and numbers exactly (Plaid, Creditsafe, VRP, CCJ, £7,500).
-- 1-8 tasks, kept in the order the person listed them.
+- Identify each DISTINCT piece of work and make it one task. Merge fragments that belong together; drop trivia.
+- "title": a short, punchy headline YOU write (3-6 words, Title Case) naming the task. E.g. "Auto-Reject Unsupported Banks", "Plaid Connection Fix".
+- "points": 2-4 clear bullet points summarising WHAT the work does and WHY it matters, rewritten into plain readable language. Keep important product names and numbers (Plaid, Creditsafe, VRP, CCJ, £7,500). One idea per point; clarity over length.
+- 1-8 tasks, most important first.
 "role": a short role line ONLY if clearly stated (e.g. "the open banking guy"), else null. "eyebrow": a short status label ONLY if clearly implied (e.g. "Our Newest Team Member"), else null.
 Return ONLY the JSON object.`;
 
   try {
     const completion = await groq.chat.completions.create({
       model: MODEL,
-      temperature: 0.2,
+      temperature: 0.4,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
@@ -131,7 +158,7 @@ function categorySections(cats: CategoryInput): [string, string][] {
 export function categorizeVerbatim(cats: CategoryInput): SlideTask[] {
   const out: SlideTask[] = [];
   for (const [label, txt] of categorySections(cats)) {
-    for (const b of naiveBullets(txt)) out.push({ title: `${label}: ${b}` });
+    for (const b of naiveBullets(txt)) out.push({ title: b, section: label });
   }
   return out;
 }
@@ -156,18 +183,19 @@ export async function formatCategorized(
   try {
     const completion = await groq.chat.completions.create({
       model: MODEL,
-      temperature: 0.2,
+      temperature: 0.4,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content: `You tidy up ${name}'s rough weekly notes into slide tasks for "Sigma Lending". You receive up to three buckets: "Delivered", "In review", "In progress". ASSIST, don't rewrite: keep their wording, meaning, and detail; fix spelling/grammar and organize it — do NOT reword aggressively, summarize away content, or invent things they didn't say.
-Return STRICT JSON: {"tasks": [{"title": string, "detail": string, "points": string[]}]}.
+          content: `You turn ${name}'s raw weekly notes — often pasted straight from a GitHub/GitLab pull request — into clean, presentation-ready slide tasks for "Sigma Lending". You receive up to three buckets: "Delivered", "In review", "In progress". REWRITE freely: you do NOT need to keep their exact words. Distil each piece of work into a clear title and tidy points a non-technical teammate can follow.
+IGNORE code-host interface noise: PR/issue numbers (#1502), branch names (feature/...), usernames, "wants to merge N commits into …", "Open"/"Closed", "Conversation/Commits/Checks/Files changed", and "+546 −150" diff counts are NOT work items.
+Return STRICT JSON: {"tasks": [{"section": string, "title": string, "points": string[]}]}.
 For each distinct piece of work:
-- "title": a short headline (3-6 words, Title Case), PREFIXED with its bucket, e.g. "Delivered: Video Call Template" or "In review: Broker Commissions".
-- "detail": an optional one-line summary in their own words with grammar fixed (empty string if the points already cover it).
-- "points": up to 4 bullet points (MAX 4; fewer is fine, [] if not needed) carrying what they actually wrote — keep their wording and detail, only fix grammar and lightly clarify. Points may be as long as they need to be; don't truncate meaning. Keep technical terms, product names, and numbers exactly (Plaid, Creditsafe, VRP, CCJ, £7,500).
-- Order: Delivered first, then In review, then In progress. 1-8 tasks total.
+- "section": EXACTLY one of "Delivered", "In review", "In progress" — the bucket the item came from. (Tasks are grouped under one heading per bucket; never repeat the bucket in the title.)
+- "title": a short, punchy headline YOU write (3-6 words, Title Case) naming the task. E.g. "Auto-Reject Unsupported Banks", "Email Preview & Editing". Do NOT prefix it with the bucket.
+- "points": 2-4 clear bullet points summarising WHAT the work does and WHY it matters, rewritten into plain readable language. Keep important product names and numbers (Plaid, Creditsafe, VRP, CCJ, £7,500). One idea per point; clarity over length.
+- Merge fragments that belong to one task; drop trivia. Order: Delivered, then In review, then In progress. 1-8 tasks total.
 Return ONLY the JSON object.`,
         },
         {

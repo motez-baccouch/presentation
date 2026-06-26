@@ -128,6 +128,12 @@ export interface SlideTask {
   detail?: string;
   /** up to 4 short, plain-language bullet points anyone can understand */
   points?: string[];
+  /**
+   * Status bucket this task came from ("Delivered" / "In review" /
+   * "In progress"). Tasks sharing a section render under one heading instead of
+   * repeating the label on every bullet. Absent for free-text updates.
+   */
+  section?: string;
 }
 
 export type SummaryStatus = "In Progress" | "In Review" | "Released";
