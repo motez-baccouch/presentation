@@ -45,7 +45,7 @@ export function Editor({
     );
     return i >= 0 ? i : 0;
   });
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [saveState, setSaveState] = useState<SaveState>("idle");
 
   const slidesRef = useRef(slides);
@@ -69,7 +69,7 @@ export function Editor({
   const COALESCE_MS = 500;
 
   // Canva-style element clipboard (in-memory; persists across slides).
-  const clipboard = useRef<SlideElement | null>(null);
+  const clipboard = useRef<SlideElement[] | null>(null);
   const pasteCount = useRef(0);
 
   const syncHist = useCallback(() => {
@@ -97,10 +97,22 @@ export function Editor({
   }, [syncHist]);
 
   const current = slides[Math.min(index, slides.length - 1)];
-  const selected = useMemo(
-    () => current?.document.elements.find((e) => e.id === selectedId) ?? null,
-    [current, selectedId],
-  );
+  // the "primary" element (last one added to the selection) drives the Inspector
+  const selected = useMemo(() => {
+    const id = selectedIds[selectedIds.length - 1];
+    return current?.document.elements.find((e) => e.id === id) ?? null;
+  }, [current, selectedIds]);
+
+  // click selection: plain click selects one (keeps a group if already in it);
+  // Ctrl/Cmd/Shift+click toggles an element in/out of a multi-selection.
+  const select = useCallback((id: string | null, additive = false) => {
+    setSelectedIds((prev) => {
+      if (!id) return [];
+      if (additive)
+        return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      return prev.includes(id) ? prev : [id];
+    });
+  }, []);
 
   const presence = usePresence(current?.id ?? null);
   const presenceBySlide = useMemo(() => {
@@ -121,7 +133,7 @@ export function Editor({
     ).json();
     setSlides(deck.slides);
     setIndex((i) => Math.min(i, deck.slides.length - 1));
-    setSelectedId(null);
+    setSelectedIds([]);
     setDeckChanged(false);
     resetHistory();
     await refreshKnownRef.current();
@@ -204,7 +216,7 @@ export function Editor({
     }
     setSlides(target);
     slidesRef.current = target;
-    setSelectedId(null);
+    setSelectedIds([]);
     lastEditAt.current = 0;
     setSaveState("saving");
     if (timer.current) clearTimeout(timer.current);
@@ -247,7 +259,20 @@ export function Editor({
         ...doc,
         elements: [...doc.elements, el],
       }));
-      setSelectedId(el.id);
+      setSelectedIds([el.id]);
+    },
+    [current, mutateDoc],
+  );
+
+  // add several elements at once (group paste / duplicate) and select them all
+  const addElements = useCallback(
+    (els: SlideElement[]) => {
+      if (!current || !els.length) return;
+      mutateDoc(current.id, (doc) => ({
+        ...doc,
+        elements: [...doc.elements, ...els],
+      }));
+      setSelectedIds(els.map((e) => e.id));
     },
     [current, mutateDoc],
   );
@@ -259,9 +284,37 @@ export function Editor({
         ...doc,
         elements: doc.elements.filter((e) => e.id !== elId),
       }));
-      setSelectedId(null);
+      setSelectedIds([]);
     },
     [current, mutateDoc],
+  );
+
+  // delete every selected element (Delete/Backspace, or cut)
+  const deleteSelected = useCallback(() => {
+    if (!current || !selectedIds.length) return;
+    const ids = new Set(selectedIds);
+    mutateDoc(current.id, (doc) => ({
+      ...doc,
+      elements: doc.elements.filter((e) => !ids.has(e.id)),
+    }));
+    setSelectedIds([]);
+  }, [current, mutateDoc, selectedIds]);
+
+  // move all selected elements by the same delta (group drag)
+  const nudgeSelected = useCallback(
+    (dx: number, dy: number) => {
+      if (!current || !selectedIds.length) return;
+      const ids = new Set(selectedIds);
+      mutateDoc(current.id, (doc) => ({
+        ...doc,
+        elements: doc.elements.map((e) =>
+          ids.has(e.id)
+            ? { ...e, x: Math.round(e.x + dx), y: Math.round(e.y + dy) }
+            : e,
+        ),
+      }));
+    },
+    [current, mutateDoc, selectedIds],
   );
 
   const setBackground = useCallback(
@@ -272,10 +325,9 @@ export function Editor({
     [current, mutateDoc],
   );
 
-  // keyboard: undo/redo + Canva-style copy / cut / paste / duplicate of elements
+  // keyboard: undo/redo, Delete, + Canva-style copy / cut / paste / duplicate
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
       // let inputs / textareas / inline text editing keep their native shortcuts
       const t = e.target as HTMLElement | null;
       if (
@@ -285,6 +337,25 @@ export function Editor({
           t.isContentEditable)
       )
         return;
+
+      // Delete / Backspace (no modifier) removes the selected element(s)
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        if (selectedIds.length) {
+          e.preventDefault();
+          deleteSelected();
+        }
+        return;
+      }
+
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const selectedEls = (current?.document.elements ?? []).filter((el) =>
+        selectedIds.includes(el.id),
+      );
       const k = e.key.toLowerCase();
       if (k === "z" && !e.shiftKey) {
         e.preventDefault();
@@ -293,34 +364,36 @@ export function Editor({
         e.preventDefault();
         redo();
       } else if (k === "c") {
-        if (selected) {
-          clipboard.current = JSON.parse(JSON.stringify(selected));
+        if (selectedEls.length) {
+          clipboard.current = JSON.parse(JSON.stringify(selectedEls));
           pasteCount.current = 0;
           e.preventDefault();
         }
       } else if (k === "x") {
-        if (selected) {
-          clipboard.current = JSON.parse(JSON.stringify(selected));
+        if (selectedEls.length) {
+          clipboard.current = JSON.parse(JSON.stringify(selectedEls));
           pasteCount.current = 0;
-          deleteElement(selected.id);
+          deleteSelected();
           e.preventDefault();
         }
       } else if (k === "v") {
-        if (clipboard.current) {
+        if (clipboard.current?.length) {
           e.preventDefault();
           const n = ++pasteCount.current;
-          addElement(cloneElement(clipboard.current, 24 * n, 24 * n));
+          addElements(
+            clipboard.current.map((el) => cloneElement(el, 24 * n, 24 * n)),
+          );
         }
       } else if (k === "d") {
-        if (selected) {
+        if (selectedEls.length) {
           e.preventDefault();
-          addElement(cloneElement(selected, 24, 24));
+          addElements(selectedEls.map((el) => cloneElement(el, 24, 24)));
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, selected, addElement, deleteElement]);
+  }, [undo, redo, current, selectedIds, addElements, deleteSelected]);
 
   // ---- structural (slide-level) ops --------------------------------------
   const addSlide = useCallback(async () => {
@@ -342,7 +415,7 @@ export function Editor({
       return next;
     });
     setIndex((i) => i + 1);
-    setSelectedId(null);
+    setSelectedIds([]);
     resetHistory();
   }, [current, resetHistory]);
 
@@ -368,7 +441,7 @@ export function Editor({
       await fetch(`/api/slides/${id}`, { method: "DELETE" });
       setSlides((prev) => prev.filter((s) => s.id !== id));
       setIndex((i) => Math.max(0, Math.min(i, slides.length - 2)));
-      setSelectedId(null);
+      setSelectedIds([]);
       resetHistory();
     },
     [slides.length, resetHistory],
@@ -385,7 +458,7 @@ export function Editor({
       setSlides(deck.slides);
       const summaryIdx = deck.slides.findIndex((s) => s.type === "SUMMARY");
       if (summaryIdx >= 0) setIndex(summaryIdx);
-      setSelectedId(null);
+      setSelectedIds([]);
       resetHistory();
     } finally {
       setSummarizing(false);
@@ -555,7 +628,7 @@ export function Editor({
           presenceBySlide={presenceBySlide}
           onSelect={(i) => {
             setIndex(i);
-            setSelectedId(null);
+            setSelectedIds([]);
           }}
           onAdd={addSlide}
           onDuplicate={duplicateSlide}
@@ -565,10 +638,11 @@ export function Editor({
 
         <EditorCanvas
           slide={current}
-          selectedId={selectedId}
+          selectedIds={selectedIds}
           othersHere={othersHere}
-          onSelect={setSelectedId}
+          onSelect={select}
           onUpdateElement={updateElement}
+          onNudgeSelected={nudgeSelected}
           onDeleteElement={deleteElement}
         />
 

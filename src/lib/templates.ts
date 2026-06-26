@@ -202,17 +202,19 @@ export function buildTitleSlide(opts: {
 const TITLE_FONT = 23;
 const DETAIL_FONT = 17;
 const POINT_FONT = 16;
-const SECTION_FONT = 17;
-const TASK_GAP = 16;
+const SECTION_FONT = 16;
+const TASK_GAP = 12;
 const DETAIL_GAP = 4;
 const POINT_GAP = 3;
 const POINT_INDENT = 20;
-const SECTION_GAP_BEFORE = 16;
-const SECTION_GAP_AFTER = 10;
+const SECTION_GAP_BEFORE = 10;
+const SECTION_GAP_AFTER = 6;
 const SECTION_H = SECTION_GAP_BEFORE + SECTION_FONT * 1.2 + SECTION_GAP_AFTER;
-const AREA_BOTTOM = 600;
-const PAGE1_TOP = 320;
-const CONT_TOP = 248;
+// Usable vertical band for tasks. Widened so pages pack fuller (less white
+// space) while staying clear of the footer logo (y≈648) and corner triangles.
+const AREA_BOTTOM = 624;
+const PAGE1_TOP = 312;
+const CONT_TOP = 200;
 
 // One heading per status bucket, shown once above its tasks.
 const SECTION_LABELS: Record<string, string> = {

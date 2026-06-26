@@ -85,17 +85,19 @@ function TextEditable({
 
 export function EditorCanvas({
   slide,
-  selectedId,
+  selectedIds,
   othersHere = [],
   onSelect,
   onUpdateElement,
+  onNudgeSelected,
   onDeleteElement,
 }: {
   slide: SlideData;
-  selectedId: string | null;
+  selectedIds: string[];
   othersHere?: string[];
-  onSelect: (id: string | null) => void;
+  onSelect: (id: string | null, additive?: boolean) => void;
   onUpdateElement: (id: string, patch: Partial<SlideElement>) => void;
+  onNudgeSelected: (dx: number, dy: number) => void;
   onDeleteElement: (id: string) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -117,10 +119,6 @@ export function EditorCanvas({
   useEffect(() => {
     setEditingId(null);
   }, [slide.id]);
-  useEffect(() => {
-    if (selectedId !== editingId) setEditingId(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId]);
 
   // ---- rotation interaction ------------------------------------------------
   const onRotateMove = useCallback(
@@ -224,13 +222,16 @@ export function EditorCanvas({
             />
 
             {ordered.map((el) => {
-              const selected = el.id === selectedId;
+              const selected = selectedIds.includes(el.id);
+              // resize/rotate/delete controls only when this is the sole selection
+              const solo = selectedIds.length === 1 && selectedIds[0] === el.id;
               const isText = el.type === "text";
-              const editing = el.id === editingId;
+              // inline editing only while this is the sole selection
+              const editing = el.id === editingId && solo;
               const rotating = el.id === rotatingId;
               const height = isText ? "auto" : (el as { h: number }).h;
 
-              const resizeHandleStyles = selected
+              const resizeHandleStyles = solo
                 ? {
                     topLeft: handleStyle({ left: -c(7), top: -c(7) }),
                     topRight: handleStyle({ right: -c(7), top: -c(7) }),
@@ -251,7 +252,7 @@ export function EditorCanvas({
                   position={{ x: el.x, y: el.y }}
                   disableDragging={editing || rotating}
                   enableResizing={
-                    selected
+                    solo
                       ? isText
                         ? { left: true, right: true }
                         : {
@@ -277,11 +278,22 @@ export function EditorCanvas({
                     outlineOffset: c(2),
                     cursor: editing ? "text" : "move",
                   }}
-                  onMouseDown={() => onSelect(el.id)}
-                  onDragStart={() => onSelect(el.id)}
-                  onDragStop={(_e, d) =>
-                    onUpdateElement(el.id, { x: Math.round(d.x), y: Math.round(d.y) })
+                  onMouseDown={(e) =>
+                    onSelect(el.id, e.ctrlKey || e.metaKey || e.shiftKey)
                   }
+                  onDragStart={() => {
+                    if (!selected) onSelect(el.id);
+                  }}
+                  onDragStop={(_e, d) => {
+                    const nx = Math.round(d.x);
+                    const ny = Math.round(d.y);
+                    if (selectedIds.length > 1 && selected) {
+                      // move the whole selection by the same delta
+                      onNudgeSelected(nx - el.x, ny - el.y);
+                    } else {
+                      onUpdateElement(el.id, { x: nx, y: ny });
+                    }
+                  }}
                   onResizeStop={(_e, _dir, ref, _delta, pos) => {
                     const patch: Partial<SlideElement> = {
                       w: Math.round(ref.offsetWidth),
@@ -328,8 +340,8 @@ export function EditorCanvas({
                       )}
                     </div>
 
-                    {/* on-element controls */}
-                    {selected && !editing && (
+                    {/* on-element controls (only for a single selection) */}
+                    {solo && !editing && (
                       <>
                         <div
                           className="no-drag"
