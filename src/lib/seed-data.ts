@@ -76,6 +76,14 @@ const PERSON_CONTENT: Record<
       "In progress: optimizing the speed of querying huge backend logs",
     ],
   },
+  harkousa: {
+    eyebrow: "Our Newest Recruit — Reporting for Duty 🫡",
+    bullets: [
+      "Just enlisted — still in training phase ☕",
+      "Onboarding mission: 60% complete",
+      "Real updates incoming next week — stay tuned",
+    ],
+  },
 };
 
 export function buildDefaultDeck(): SeedSlide[] {

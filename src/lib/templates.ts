@@ -114,6 +114,7 @@ const TITLE_AVATAR_SLOTS = [
   { x: 884, y: 312, w: 176 },
   { x: 1086, y: 372, w: 150 },
   { x: 832, y: 500, w: 162 },
+  { x: 1064, y: 528, w: 146 },
 ];
 
 export function buildTitleSlide(opts: {

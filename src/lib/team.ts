@@ -84,6 +84,15 @@ export const TEAM: TeamMember[] = [
     style: { avatar: "right", bg: "mesh" },
     aliases: ["haifa", "hayfachouchene", "chouchene"],
   },
+  {
+    key: "harkousa",
+    name: "Ali Harkousa",
+    role: "New Commander in Arms",
+    avatar: "/avatars/aliHarkousa.png",
+    accent: "#e8420e",
+    style: { avatar: "left", bg: "cream" },
+    aliases: ["aliharkousa", "harkousa"],
+  },
 ];
 
 /** Resolve a free-text name (from Slack) to a roster member. */
