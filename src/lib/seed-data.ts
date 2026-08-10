@@ -76,7 +76,7 @@ const PERSON_CONTENT: Record<
       "In progress: optimizing the speed of querying huge backend logs",
     ],
   },
-  hourkous: {
+  harkous: {
     eyebrow: "Our Newest Recruit — Reporting for Duty 🫡",
     bullets: [
       "Just enlisted — still in training phase ☕",

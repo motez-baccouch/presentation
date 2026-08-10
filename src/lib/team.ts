@@ -85,13 +85,13 @@ export const TEAM: TeamMember[] = [
     aliases: ["haifa", "hayfachouchene", "chouchene"],
   },
   {
-    key: "hourkous",
-    name: "Ali Hourkous",
+    key: "harkous",
+    name: "Ali Harkous",
     role: "New Commander in Arms",
     avatar: "/avatars/aliHarkousa.png",
     accent: "#e8420e",
     style: { avatar: "left", bg: "cream" },
-    aliases: ["alihourkous", "hourkous", "harkousa", "aliharkousa"],
+    aliases: ["aliharkous", "harkous", "hourkous", "harkousa"],
   },
 ];
 
