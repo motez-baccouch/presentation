@@ -111,3 +111,13 @@ export function findMember(input: string): TeamMember | undefined {
 export function getMember(key: string): TeamMember | undefined {
   return TEAM.find((m) => m.key === key);
 }
+
+/** First name, plus a last initial when teammates share it ("Ali J." / "Ali H."). */
+export function shortName(member: TeamMember): string {
+  const [first, ...rest] = member.name.split(" ");
+  const clash = TEAM.some(
+    (m) => m.key !== member.key && m.name.split(" ")[0] === first,
+  );
+  const last = rest[rest.length - 1];
+  return clash && last ? `${first} ${last[0]}.` : first;
+}

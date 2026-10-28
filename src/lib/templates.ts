@@ -10,7 +10,8 @@ import {
   STAGE_WIDTH,
   STAGE_HEIGHT,
 } from "./types";
-import { TeamMember, TEAM, getMember } from "./team";
+import { TeamMember, TEAM, getMember, shortName } from "./team";
+import { groupByPerson } from "./summary-core";
 
 export function genId(): string {
   // Works in both Node (seed) and the browser (editor).
@@ -594,153 +595,438 @@ const SUMMARY_COLUMNS: { status: SummaryStatus; color: string; headInk: string }
     { status: "Released", color: "#f4691e", headInk: "#ffffff" },
   ];
 
-export function buildSummarySlide(
-  items: SummaryItem[],
-  dateStr?: string,
-): SlideDocument {
-  const elements: SlideElement[] = [
-    logo({ x: 1024, y: 56, w: 172, z: 9 }),
-    text({
-      text: (dateStr ?? "This Week").toUpperCase(),
-      role: "eyebrow",
-      x: 70,
-      y: 64,
-      w: 700,
-      fontFamily: DISPLAY,
-      fontSize: 18,
-      fontWeight: 700,
-      letterSpacing: 4,
-      color: "#f4691e",
-      uppercase: true,
-      anim: "left",
-    }),
-    text({
-      text: "This Week at Sigma",
-      role: "title",
-      x: 68,
-      y: 100,
-      w: 900,
-      fontFamily: DISPLAY,
-      fontSize: 58,
-      fontWeight: 800,
-      color: INK,
-      anim: "up",
-    }),
-  ];
+// Status-board geometry. Every item is shown: items are grouped by person in
+// each column, and the board continues onto extra pages only when needed.
+const SUM_LEFT = 70;
+const SUM_GAP = 28;
+const SUM_COL_W = Math.round((STAGE_WIDTH - SUM_LEFT * 2 - SUM_GAP * 2) / 3);
+const SUM_HEAD_H = 54;
+const SUM_PAD_X = 18;
+const SUM_PAD_TOP = 20;
+const SUM_PAD_BOTTOM = 18;
+const SUM_CARD_BOTTOM = 664;
+const SUM_TOP_FIRST = 200;
+const SUM_TOP_CONT = 150;
 
-  const left = 70;
-  const gap = 28;
-  const colW = Math.round((STAGE_WIDTH - left * 2 - gap * 2) / 3);
-  const cardTop = 212;
-  const cardH = 440;
-  const headH = 54;
-  const itemTop = cardTop + headH + 22;
-  const itemStep = 68;
-  const maxItems = 5;
+interface SumMetrics {
+  avatar: number;
+  nameFont: number;
+  nameGap: number;
+  labelFont: number;
+  labelLH: number;
+  labelGap: number;
+  blockGap: number;
+}
+const SUM_NORMAL: SumMetrics = {
+  avatar: 36,
+  nameFont: 13,
+  nameGap: 4,
+  labelFont: 15,
+  labelLH: 1.25,
+  labelGap: 5,
+  blockGap: 16,
+};
+// tried first when the normal size would spill onto a second page
+const SUM_COMPACT: SumMetrics = {
+  avatar: 30,
+  nameFont: 12,
+  nameGap: 3,
+  labelFont: 14,
+  labelLH: 1.2,
+  labelGap: 3,
+  blockGap: 10,
+};
 
-  SUMMARY_COLUMNS.forEach((col, ci) => {
-    const x = left + ci * (colW + gap);
-    const colItems = items.filter((it) => it.status === col.status);
+interface SumBlock {
+  personKey: string;
+  labels: string[];
+  /** this person's list started on an earlier page */
+  cont?: boolean;
+}
 
+const sumTextX = (m: SumMetrics) => SUM_PAD_X + m.avatar + 12;
+const sumLabelX = (m: SumMetrics) => sumTextX(m) + 12;
+const sumLabelW = (m: SumMetrics) => SUM_COL_W - sumLabelX(m) - SUM_PAD_X;
+
+/** Lines a label wraps to, simulating greedy word-wrap (long words wrap early). */
+function wrappedLines(label: string, charsPerLine: number): number {
+  let lines = 1;
+  let used = 0;
+  for (const word of label.split(/\s+/).filter(Boolean)) {
+    const len = word.length;
+    if (used && used + 1 + len > charsPerLine) {
+      lines++;
+      used = 0;
+    }
+    if (len > charsPerLine) {
+      lines += Math.ceil(len / charsPerLine) - 1;
+      used = len % charsPerLine || charsPerLine;
+    } else {
+      used += (used ? 1 : 0) + len;
+    }
+  }
+  return lines;
+}
+
+function sumLabelH(label: string, m: SumMetrics): number {
+  const cpl = Math.max(12, Math.floor(sumLabelW(m) / (m.labelFont * 0.55)));
+  return wrappedLines(label, cpl) * m.labelFont * m.labelLH;
+}
+
+function sumBlockH(labels: string[], m: SumMetrics): number {
+  const labelsH =
+    labels.reduce((h, l) => h + sumLabelH(l, m), 0) +
+    Math.max(0, labels.length - 1) * m.labelGap;
+  return Math.max(m.avatar, m.nameFont * 1.2 + m.nameGap + labelsH);
+}
+
+// usable height inside a card on the first page / on continuation pages
+const SUM_CAP_FIRST =
+  SUM_CARD_BOTTOM - SUM_PAD_BOTTOM - (SUM_TOP_FIRST + SUM_HEAD_H + SUM_PAD_TOP);
+const SUM_CAP_CONT =
+  SUM_CARD_BOTTOM - SUM_PAD_BOTTOM - (SUM_TOP_CONT + SUM_HEAD_H + SUM_PAD_TOP);
+
+/**
+ * Pack one column's person blocks into card-sized lanes: the first lane fits
+ * the first page, later lanes fit continuation pages. Long lists split.
+ */
+function packLanes(blocks: SumBlock[], m: SumMetrics): SumBlock[][] {
+  const lanes: SumBlock[][] = [[]];
+  let used = 0;
+  for (const block of blocks) {
+    let rest = block.labels;
+    let cont = false;
+    while (rest.length) {
+      const lane = lanes[lanes.length - 1];
+      const room = (lanes.length === 1 ? SUM_CAP_FIRST : SUM_CAP_CONT) - used;
+      let fit = 0;
+      while (fit < rest.length && sumBlockH(rest.slice(0, fit + 1), m) <= room)
+        fit++;
+      // don't strand a lone label at the bottom — start a fresh lane instead
+      if (lane.length && fit < Math.min(2, rest.length)) {
+        lanes.push([]);
+        used = 0;
+        continue;
+      }
+      const take = Math.max(1, fit);
+      const labels = rest.slice(0, take);
+      lane.push({ personKey: block.personKey, labels, cont });
+      used += sumBlockH(labels, m) + m.blockGap;
+      rest = rest.slice(take);
+      cont = true;
+      if (rest.length) {
+        lanes.push([]);
+        used = 0;
+      }
+    }
+  }
+  return lanes;
+}
+
+interface SumLane {
+  /** index into SUMMARY_COLUMNS */
+  ci: number;
+  blocks: SumBlock[];
+}
+
+/** One status card: coloured header, then each person's avatar + items. */
+function summaryLane(
+  elements: SlideElement[],
+  opts: { x: number; cardTop: number; lane: SumLane; total: number; cont: boolean; m: SumMetrics },
+) {
+  const { x, cardTop, lane, m } = opts;
+  const col = SUMMARY_COLUMNS[lane.ci];
+  const contentTop = cardTop + SUM_HEAD_H + SUM_PAD_TOP;
+
+  elements.push(
     // card
-    elements.push(
-      shape({
-        kind: "rect",
-        x,
-        y: cardTop,
-        w: colW,
-        h: cardH,
-        radius: 22,
-        fill: "#ffffff",
-        opacity: 0.92,
-        anim: "up",
-        z: 2,
-      }),
-    );
+    shape({
+      kind: "rect",
+      x,
+      y: cardTop,
+      w: SUM_COL_W,
+      h: SUM_CARD_BOTTOM - cardTop,
+      radius: 22,
+      fill: "#ffffff",
+      opacity: 0.92,
+      anim: "up",
+      z: 2,
+    }),
     // header bar
-    elements.push(
-      shape({
-        kind: "rect",
-        x,
-        y: cardTop,
-        w: colW,
-        h: headH,
-        radius: 22,
-        fill: col.color,
-        anim: "left",
-        z: 3,
-      }),
-    );
+    shape({
+      kind: "rect",
+      x,
+      y: cardTop,
+      w: SUM_COL_W,
+      h: SUM_HEAD_H,
+      radius: 22,
+      fill: col.color,
+      anim: "left",
+      z: 3,
+    }),
+    text({
+      text: opts.cont
+        ? `${col.status}  ·  continued`
+        : `${col.status}  ·  ${opts.total}`,
+      role: "subtitle",
+      x: x + 22,
+      y: cardTop + 14,
+      w: SUM_COL_W - 44,
+      fontFamily: DISPLAY,
+      fontSize: 22,
+      fontWeight: 700,
+      color: col.headInk,
+      anim: "fade",
+      z: 4,
+    }),
+  );
+
+  if (!lane.blocks.length) {
     elements.push(
       text({
-        text: `${col.status}  ·  ${colItems.length}`,
-        role: "subtitle",
+        text: "Nothing here this week",
+        role: "footer",
         x: x + 22,
-        y: cardTop + 14,
-        w: colW - 44,
-        fontFamily: DISPLAY,
-        fontSize: 22,
-        fontWeight: 700,
-        color: col.headInk,
+        y: contentTop,
+        w: SUM_COL_W - 44,
+        fontSize: 15,
+        fontWeight: 500,
+        italic: true,
+        color: "#a08a5e",
         anim: "fade",
-        z: 4,
+        z: 5,
       }),
     );
+    return;
+  }
 
-    colItems.slice(0, maxItems).forEach((it, ii) => {
-      const y = itemTop + ii * itemStep;
-      const member = getMember(it.personKey);
-      if (member) {
-        elements.push(
-          image({
-            url: member.avatar,
-            x: x + 18,
-            y,
-            w: 40,
-            h: 40,
-            circle: true,
-            anim: "pop",
-            z: 5,
-          }),
-        );
-      }
+  let y = contentTop;
+  for (const block of lane.blocks) {
+    const member = getMember(block.personKey);
+    if (member) {
       elements.push(
+        image({
+          url: member.avatar,
+          x: x + SUM_PAD_X,
+          y,
+          w: m.avatar,
+          h: m.avatar,
+          circle: true,
+          anim: "pop",
+          z: 5,
+        }),
+      );
+    }
+    const name = member ? shortName(member) : block.personKey;
+    elements.push(
+      text({
+        text: block.cont ? `${name} (cont.)` : name,
+        role: "eyebrow",
+        x: x + sumTextX(m),
+        y: y + 1,
+        w: SUM_COL_W - sumTextX(m) - SUM_PAD_X,
+        fontFamily: DISPLAY,
+        fontSize: m.nameFont,
+        fontWeight: 700,
+        letterSpacing: 1.5,
+        lineHeight: 1.2,
+        color: "#a08a5e",
+        uppercase: true,
+        anim: "fade",
+        z: 5,
+      }),
+    );
+    let ly = y + m.nameFont * 1.2 + m.nameGap;
+    for (const label of block.labels) {
+      const lineH = m.labelFont * m.labelLH;
+      elements.push(
+        shape({
+          kind: "rect",
+          x: x + sumTextX(m),
+          y: Math.round(ly + lineH / 2 - 3),
+          w: 6,
+          h: 6,
+          radius: 3,
+          fill: col.color,
+          anim: "pop",
+          z: 5,
+        }),
         text({
-          text: it.label,
+          text: label,
           role: "body",
-          x: x + 68,
-          y: y - 2,
-          w: colW - 86,
-          fontSize: 16,
+          x: x + sumLabelX(m),
+          y: Math.round(ly),
+          w: sumLabelW(m),
+          fontSize: m.labelFont,
           fontWeight: 500,
-          lineHeight: 1.2,
+          lineHeight: m.labelLH,
           color: INK,
           anim: "up",
           z: 5,
         }),
       );
-    });
-
-    if (colItems.length > maxItems) {
-      elements.push(
-        text({
-          text: `+${colItems.length - maxItems} more`,
-          role: "footer",
-          x: x + 22,
-          y: cardTop + cardH - 34,
-          w: colW - 44,
-          fontSize: 14,
-          fontWeight: 600,
-          color: "#a08a5e",
-          anim: "fade",
-          z: 5,
-        }),
-      );
+      ly += sumLabelH(label, m) + m.labelGap;
     }
-  });
+    y += sumBlockH(block.labels, m) + m.blockGap;
+  }
+}
+
+function summaryPage(opts: {
+  pageIndex: number;
+  pageCount: number;
+  lanes: SumLane[];
+  totals: number[];
+  m: SumMetrics;
+  items: SummaryItem[];
+  dateStr?: string;
+}): SlideDocument {
+  const { pageIndex, pageCount, lanes, m } = opts;
+  const isCont = pageIndex > 0;
+  const cardTop = isCont ? SUM_TOP_CONT : SUM_TOP_FIRST;
+  const eyebrow = (opts.dateStr ?? "This Week").toUpperCase();
+
+  const elements: SlideElement[] = isCont
+    ? [
+        logo({ x: 1056, y: 40, w: 140, z: 9 }),
+        text({
+          text: eyebrow,
+          role: "eyebrow",
+          x: 70,
+          y: 46,
+          w: 700,
+          fontFamily: DISPLAY,
+          fontSize: 16,
+          fontWeight: 700,
+          letterSpacing: 4,
+          color: "#f4691e",
+          uppercase: true,
+          anim: "left",
+        }),
+        text({
+          text: "This Week at Sigma — continued",
+          role: "title",
+          x: 68,
+          y: 74,
+          w: 900,
+          fontFamily: DISPLAY,
+          fontSize: 40,
+          fontWeight: 800,
+          color: INK,
+          anim: "up",
+        }),
+      ]
+    : [
+        logo({ x: 1024, y: 56, w: 172, z: 9 }),
+        text({
+          text: eyebrow,
+          role: "eyebrow",
+          x: 70,
+          y: 64,
+          w: 700,
+          fontFamily: DISPLAY,
+          fontSize: 18,
+          fontWeight: 700,
+          letterSpacing: 4,
+          color: "#f4691e",
+          uppercase: true,
+          anim: "left",
+        }),
+        text({
+          text: "This Week at Sigma",
+          role: "title",
+          x: 68,
+          y: 100,
+          w: 900,
+          fontFamily: DISPLAY,
+          fontSize: 58,
+          fontWeight: 800,
+          color: INK,
+          anim: "up",
+        }),
+      ];
+
+  // a part-filled last page keeps its cards centred
+  const rowW = lanes.length * SUM_COL_W + (lanes.length - 1) * SUM_GAP;
+  const startX = Math.round((STAGE_WIDTH - rowW) / 2);
+  lanes.forEach((lane, i) =>
+    summaryLane(elements, {
+      x: startX + i * (SUM_COL_W + SUM_GAP),
+      cardTop,
+      lane,
+      total: opts.totals[lane.ci],
+      cont: isCont,
+      m,
+    }),
+  );
+
+  if (pageCount > 1) {
+    elements.push(
+      text({
+        text: `${pageIndex + 1} / ${pageCount}`,
+        role: "footer",
+        x: STAGE_WIDTH - 200,
+        y: 680,
+        w: 130,
+        align: "right",
+        fontFamily: DISPLAY,
+        fontSize: 16,
+        fontWeight: 700,
+        color: "#a08a5e",
+        anim: "fade",
+        z: 7,
+      }),
+    );
+  }
 
   // keep the structured items on the doc so the OG/download image matches.
-  return { background: { kind: "mesh" }, elements, summary: items };
+  return { background: { kind: "mesh" }, elements, summary: opts.items };
+}
+
+/**
+ * The team status board. Every item is shown, grouped by person. Page 1 is
+ * the familiar three-column board; anything that doesn't fit (even at a
+ * compact size) continues on extra pages that only carry the columns that
+ * overflowed, three cards per page.
+ */
+export function buildSummarySlides(
+  items: SummaryItem[],
+  dateStr?: string,
+): SlideDocument[] {
+  const grouped = SUMMARY_COLUMNS.map((col) => ({
+    total: items.filter((it) => it.status === col.status).length,
+    blocks: groupByPerson(items, col.status) as SumBlock[],
+  }));
+  const layout = (m: SumMetrics) => grouped.map((g) => packLanes(g.blocks, m));
+
+  let m = SUM_NORMAL;
+  let columns = layout(m);
+  if (columns.some((lanes) => lanes.length > 1)) {
+    const compact = layout(SUM_COMPACT);
+    if (compact.every((lanes) => lanes.length === 1)) {
+      m = SUM_COMPACT;
+      columns = compact;
+    }
+  }
+
+  const first: SumLane[] = columns.map((lanes, ci) => ({ ci, blocks: lanes[0] }));
+  const overflow: SumLane[] = columns.flatMap((lanes, ci) =>
+    lanes.slice(1).map((blocks) => ({ ci, blocks })),
+  );
+  const pages = [first];
+  for (let i = 0; i < overflow.length; i += 3) pages.push(overflow.slice(i, i + 3));
+
+  const totals = grouped.map((g) => g.total);
+  return pages.map((lanes, pageIndex) =>
+    summaryPage({
+      pageIndex,
+      pageCount: pages.length,
+      lanes,
+      totals,
+      m,
+      items,
+      dateStr,
+    }),
+  );
 }
 
 export function buildThankYouSlide(): SlideDocument {

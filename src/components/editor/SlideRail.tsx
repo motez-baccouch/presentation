@@ -151,6 +151,8 @@ export function SlideRail({
   return (
     <aside className="thin-scroll flex w-48 shrink-0 flex-col gap-1 overflow-y-auto border-r border-sigma-ink/10 bg-sigma-sand p-2">
       <DndContext
+        // a fixed id keeps dnd-kit's aria ids identical on server and client
+        id="slide-rail"
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragEnd={onDragEnd}

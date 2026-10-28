@@ -85,7 +85,9 @@ export function SlideView({
         {ordered.map((el) => (
           <motion.div
             key={el.id}
-            style={wrapperStyle(el)}
+            // framer-motion owns `transform` while animating, so pass the
+            // rotation as its own motion value instead of a raw transform
+            style={{ ...wrapperStyle(el), transform: undefined, rotate: el.rotation ?? 0 }}
             variants={VARIANTS[el.anim ?? "up"] ?? VARIANTS.up}
             transition={
               (el.anim ?? "up") === "pop"

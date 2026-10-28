@@ -1,7 +1,11 @@
 import { ImageResponse } from "next/og";
 import { getPresentation } from "@/lib/db";
-import { collectUpdates, naiveCategorize } from "@/lib/summary-core";
-import { getMember } from "@/lib/team";
+import {
+  collectUpdates,
+  groupByPerson,
+  naiveCategorize,
+} from "@/lib/summary-core";
+import { getMember, shortName } from "@/lib/team";
 import { formatToday } from "@/lib/date";
 import { SummaryStatus } from "@/lib/types";
 
@@ -14,10 +18,27 @@ const COLUMNS: { status: SummaryStatus; color: string; ink: string }[] = [
   { status: "Released", color: "#f4691e", ink: "#ffffff" },
 ];
 
+const WIDTH = 1200;
+const MIN_HEIGHT = 630;
+// room taken by everything except the column bodies (padding, title, headers)
+const CHROME_H = 300;
+const LABEL_CHARS_PER_LINE = 30;
+const LABEL_LINE_H = 16 * 1.2;
+
 function base(req: Request): string {
   if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
   const url = new URL(req.url);
   return `${url.protocol}//${url.host}`;
+}
+
+/** Estimated height of one person block (name + their labels). */
+function blockHeight(labels: string[]): number {
+  const labelsH = labels.reduce(
+    (h, l) =>
+      h + Math.max(1, Math.ceil(l.length / LABEL_CHARS_PER_LINE)) * LABEL_LINE_H + 5,
+    0,
+  );
+  return Math.max(34, 18 + labelsH);
 }
 
 export async function GET(req: Request) {
@@ -31,12 +52,26 @@ export async function GET(req: Request) {
       ? summarySlide.document.summary
       : naiveCategorize(collectUpdates(deck.slides));
 
+  const columns = COLUMNS.map((col) => ({
+    ...col,
+    total: items.filter((i) => i.status === col.status).length,
+    blocks: groupByPerson(items, col.status),
+  }));
+  // every item is shown — the image grows taller instead of truncating
+  const tallest = Math.max(
+    0,
+    ...columns.map((col) =>
+      col.blocks.reduce((h, b) => h + blockHeight(b.labels) + 14, 0),
+    ),
+  );
+  const height = Math.max(MIN_HEIGHT, Math.ceil(CHROME_H + tallest));
+
   return new ImageResponse(
     (
       <div
         style={{
-          width: "1200px",
-          height: "630px",
+          width: `${WIDTH}px`,
+          height: `${height}px`,
           display: "flex",
           flexDirection: "column",
           padding: "48px",
@@ -81,90 +116,135 @@ export async function GET(req: Request) {
 
         {/* columns */}
         <div style={{ display: "flex", flex: 1, gap: "22px" }}>
-          {COLUMNS.map((col) => {
-            const list = items.filter((i) => i.status === col.status);
-            const shown = list.slice(0, 6);
-            return (
+          {columns.map((col) => (
+            <div
+              key={col.status}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                flex: 1,
+                backgroundColor: "#ffffff",
+                borderRadius: "20px",
+                border: "1px solid #eadfca",
+                overflow: "hidden",
+              }}
+            >
               <div
-                key={col.status}
+                style={{
+                  display: "flex",
+                  padding: "13px 18px",
+                  backgroundColor: col.color,
+                  color: col.ink,
+                  fontSize: "21px",
+                  fontWeight: 700,
+                }}
+              >
+                {col.status} · {col.total}
+              </div>
+              <div
                 style={{
                   display: "flex",
                   flexDirection: "column",
-                  flex: 1,
-                  backgroundColor: "#ffffff",
-                  borderRadius: "20px",
-                  border: "1px solid #eadfca",
-                  overflow: "hidden",
+                  padding: "15px",
+                  gap: "14px",
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    padding: "13px 18px",
-                    backgroundColor: col.color,
-                    color: col.ink,
-                    fontSize: "21px",
-                    fontWeight: 700,
-                  }}
-                >
-                  {col.status} · {list.length}
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    padding: "15px",
-                    gap: "12px",
-                  }}
-                >
-                  {shown.map((it, i) => {
-                    const m = getMember(it.personKey);
-                    return (
+                {!col.blocks.length && (
+                  <div
+                    style={{
+                      display: "flex",
+                      fontSize: "15px",
+                      fontStyle: "italic",
+                      color: "#a08a5e",
+                    }}
+                  >
+                    Nothing here this week
+                  </div>
+                )}
+                {col.blocks.map((block) => {
+                  const m = getMember(block.personKey);
+                  return (
+                    <div
+                      key={block.personKey}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "11px",
+                      }}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`${origin}${m?.avatar ?? "/avatars/team.png"}`}
+                        width={34}
+                        height={34}
+                        alt=""
+                        style={{
+                          borderRadius: "9999px",
+                          objectFit: "cover",
+                          border: `2px solid ${col.color}`,
+                        }}
+                      />
                       <div
-                        key={i}
                         style={{
                           display: "flex",
-                          alignItems: "center",
-                          gap: "11px",
+                          flexDirection: "column",
+                          flex: 1,
+                          gap: "5px",
                         }}
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={`${origin}${m?.avatar ?? "/avatars/team.png"}`}
-                          width={34}
-                          height={34}
-                          alt=""
-                          style={{
-                            borderRadius: "9999px",
-                            objectFit: "cover",
-                            border: `2px solid ${col.color}`,
-                          }}
-                        />
                         <div
                           style={{
                             display: "flex",
-                            fontSize: "16px",
-                            color: "#1c1407",
-                            lineHeight: 1.15,
+                            fontSize: "12px",
+                            fontWeight: 700,
+                            letterSpacing: "1.5px",
+                            color: "#a08a5e",
                           }}
                         >
-                          {it.label}
+                          {(m ? shortName(m) : block.personKey).toUpperCase()}
                         </div>
+                        {block.labels.map((label, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              display: "flex",
+                              alignItems: "flex-start",
+                              gap: "7px",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                width: "6px",
+                                height: "6px",
+                                marginTop: "7px",
+                                borderRadius: "3px",
+                                backgroundColor: col.color,
+                              }}
+                            />
+                            <div
+                              style={{
+                                display: "flex",
+                                flex: 1,
+                                fontSize: "16px",
+                                color: "#1c1407",
+                                lineHeight: 1.2,
+                              }}
+                            >
+                              {label}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    );
-                  })}
-                  {list.length > shown.length && (
-                    <div style={{ display: "flex", fontSize: "14px", color: "#a08a5e" }}>
-                      +{list.length - shown.length} more
                     </div>
-                  )}
-                </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </div>
     ),
-    { width: 1200, height: 630 },
+    { width: WIDTH, height },
   );
 }

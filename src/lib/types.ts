@@ -36,6 +36,10 @@ export interface BaseElement {
   z?: number;
   /** entrance animation in present mode */
   anim?: "fade" | "up" | "left" | "right" | "pop" | "none";
+  /** elements sharing a groupId select and move together in the editor */
+  groupId?: string;
+  /** locked elements can be selected but not moved or resized */
+  locked?: boolean;
 }
 
 export interface TextElement extends BaseElement {

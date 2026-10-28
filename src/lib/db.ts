@@ -268,21 +268,45 @@ export async function getDeckVersion(): Promise<string> {
   return `${agg._count}-${agg._max.updatedAt?.getTime() ?? 0}`;
 }
 
-/** Create or update the single AI status-board summary slide (before thank-you). */
-export async function upsertSummarySlide(
-  document: SlideDocument,
+/**
+ * Create or update the AI status-board summary page(s) (before thank-you).
+ * Existing pages are updated in place, extra pages are inserted right after
+ * them, and surplus old pages are removed. Returns the first page.
+ */
+export async function upsertSummarySlides(
+  documents: SlideDocument[],
 ): Promise<SlideData> {
   const pres = await getPresentation();
-  const existing = pres.slides.find((s) => s.type === "SUMMARY");
-  if (existing) {
-    await updateSlideDocument(existing.id, document);
-    return { ...existing, document };
-  }
+  const existing = pres.slides
+    .filter((s) => s.type === "SUMMARY")
+    .sort((a, b) => a.order - b.order);
   const thankYou = pres.slides.find((s) => s.type === "THANKYOU");
-  const afterId = thankYou
-    ? pres.slides[pres.slides.indexOf(thankYou) - 1]?.id ?? null
-    : pres.slides[pres.slides.length - 1]?.id ?? null;
-  return createSlide({ type: "SUMMARY", personKey: null, document, afterId });
+  let anchorId = existing.length
+    ? existing[existing.length - 1].id
+    : thankYou
+      ? pres.slides[pres.slides.indexOf(thankYou) - 1]?.id ?? null
+      : pres.slides[pres.slides.length - 1]?.id ?? null;
+
+  let first: SlideData | null = null;
+  for (let i = 0; i < documents.length; i++) {
+    if (i < existing.length) {
+      await updateSlideDocument(existing[i].id, documents[i]);
+      if (i === 0) first = { ...existing[i], document: documents[i] };
+    } else {
+      const created = await createSlide({
+        type: "SUMMARY",
+        personKey: null,
+        document: documents[i],
+        afterId: anchorId,
+      });
+      anchorId = created.id;
+      if (i === 0) first = created;
+    }
+  }
+  for (let i = documents.length; i < existing.length; i++) {
+    await deleteSlide(existing[i].id);
+  }
+  return first ?? (await getPresentation()).slides[0];
 }
 
 /**

@@ -3,7 +3,7 @@ import { TEAM } from "./team";
 import {
   buildTitleSlide,
   buildPersonSlides,
-  buildSummarySlide,
+  buildSummarySlides,
   buildThankYouSlide,
 } from "./templates";
 import { naiveCategorize, PersonUpdate } from "./summary-core";
@@ -116,12 +116,14 @@ export function buildDefaultDeck(): SeedSlide[] {
     name: m.name,
     bullets: PERSON_CONTENT[m.key]?.bullets ?? [],
   })).filter((u) => u.bullets.length);
-  slides.push({
-    order: order++,
-    type: "SUMMARY",
-    personKey: null,
-    document: buildSummarySlide(naiveCategorize(updates), dateStr),
-  });
+  for (const document of buildSummarySlides(naiveCategorize(updates), dateStr)) {
+    slides.push({
+      order: order++,
+      type: "SUMMARY",
+      personKey: null,
+      document,
+    });
+  }
 
   slides.push({
     order: order++,

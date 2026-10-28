@@ -1,8 +1,8 @@
 import { NextResponse, after } from "next/server";
 import { findMember, TEAM } from "@/lib/team";
 import { formatUpdate } from "@/lib/groq";
-import { buildPersonSlides, buildSummarySlide } from "@/lib/templates";
-import { upsertPersonSlides, upsertSummarySlide } from "@/lib/db";
+import { buildPersonSlides, buildSummarySlides } from "@/lib/templates";
+import { upsertPersonSlides, upsertSummarySlides } from "@/lib/db";
 import { generateSummary, summaryToText } from "@/lib/summary";
 import { formatToday } from "@/lib/date";
 import {
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
       after(async () => {
         try {
           const items = await generateSummary();
-          await upsertSummarySlide(buildSummarySlide(items, formatToday()));
+          await upsertSummarySlides(buildSummarySlides(items, formatToday()));
           const recap = summaryToText(items);
           await respond(
             responseUrl,

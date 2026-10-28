@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { generateSummary, summaryToText } from "@/lib/summary";
-import { buildSummarySlide } from "@/lib/templates";
-import { upsertSummarySlide, getPresentation } from "@/lib/db";
+import { buildSummarySlides } from "@/lib/templates";
+import { upsertSummarySlides, getPresentation } from "@/lib/db";
 import { formatToday } from "@/lib/date";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
 
   // Refresh the AI summary slide so the deck and the message match.
   const items = await generateSummary();
-  await upsertSummarySlide(buildSummarySlide(items, formatToday()));
+  await upsertSummarySlides(buildSummarySlides(items, formatToday()));
 
   const deck = await getPresentation();
   const summaryIdx = deck.slides.findIndex((s) => s.type === "SUMMARY");

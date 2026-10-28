@@ -13,6 +13,9 @@ import {
   COLOR_SWATCHES,
 } from "@/lib/types";
 import { genId } from "@/lib/templates";
+import { selectionUnits } from "./geometry";
+import type { AlignEdge, EditorActions, ElementPatch, Patches } from "./actions";
+import { uploadFile } from "./media";
 
 function Section({
   title,
@@ -68,20 +71,32 @@ const btn =
   "rounded-lg border border-sigma-ink/15 bg-white px-2.5 py-1.5 text-xs font-semibold text-sigma-ink transition hover:bg-sigma-sand";
 const btnActive =
   "rounded-lg border border-sigma-orange bg-sigma-orange/10 px-2.5 py-1.5 text-xs font-semibold text-sigma-orange";
+const deleteBtn =
+  "w-full rounded-lg border border-sigma-red/30 py-1.5 text-xs font-semibold text-sigma-red transition hover:bg-sigma-red/5";
 
 export function Inspector({
   slide,
   selected,
+  primary,
+  actions,
   onUpdateElement,
+  onUpdateElements,
   onDeleteElement,
   onAddElement,
+  onAddFiles,
   onSetBackground,
 }: {
   slide: SlideData;
-  selected: SlideElement | null;
-  onUpdateElement: (id: string, patch: Partial<SlideElement>) => void;
+  /** every selected element */
+  selected: SlideElement[];
+  /** the most recently selected one (drives single-element panels) */
+  primary: SlideElement | null;
+  actions: EditorActions;
+  onUpdateElement: (id: string, patch: ElementPatch) => void;
+  onUpdateElements: (patches: Patches) => void;
   onDeleteElement: (id: string) => void;
   onAddElement: (el: SlideElement) => void;
+  onAddFiles: (files: File[]) => Promise<void>;
   onSetBackground: (bg: SlideBackground) => void;
 }) {
   const fileAdd = useRef<HTMLInputElement>(null);
@@ -89,98 +104,64 @@ export function Inspector({
   const fileVideo = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string>("");
 
-  async function upload(file: File): Promise<string | null> {
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch("/api/upload", { method: "POST", body: form });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      alert(data.error ?? "Upload failed.");
-      return null;
+  const single = selected.length === 1 ? primary : null;
+  const sameType =
+    selected.length && selected.every((e) => e.type === selected[0].type)
+      ? selected[0].type
+      : null;
+  // panels edit the primary element; with a multi-selection of one kind, the
+  // change is applied to every selected element of that kind
+  const panelEl =
+    primary && primary.type === sameType ? primary : (selected[0] ?? null);
+  const patchSelected = (p: ElementPatch) =>
+    onUpdateElements(Object.fromEntries(selected.map((e) => [e.id, p])));
+  const removeSelected = () =>
+    single ? onDeleteElement(single.id) : actions.remove();
+
+  async function addFiles(files: File[], kind: string) {
+    setBusy(kind);
+    try {
+      await onAddFiles(files);
+    } finally {
+      setBusy("");
     }
-    return data.url as string;
-  }
-
-  async function addImage(file: File) {
-    setBusy("upload");
-    const url = await upload(file);
-    setBusy("");
-    if (!url) return;
-    onAddElement({
-      id: genId(),
-      type: "image",
-      url,
-      x: 440,
-      y: 200,
-      w: 400,
-      h: 300,
-      fit: "cover",
-      radius: 16,
-      shadow: true,
-      anim: "pop",
-      z: 8,
-    });
-  }
-
-  async function addVideo(file: File) {
-    setBusy("video");
-    const url = await upload(file);
-    setBusy("");
-    if (!url) return;
-    onAddElement({
-      id: genId(),
-      type: "video",
-      url,
-      x: 420,
-      y: 190,
-      w: 440,
-      h: 248,
-      radius: 16,
-      shadow: true,
-      autoplay: true,
-      loop: true,
-      muted: true,
-      controls: false,
-      anim: "pop",
-      z: 8,
-    });
   }
 
   async function replaceImage(file: File) {
-    if (!selected || selected.type !== "image") return;
+    if (!single || single.type !== "image") return;
     setBusy("upload");
-    const url = await upload(file);
+    const url = await uploadFile(file);
     setBusy("");
-    if (url) onUpdateElement(selected.id, { url });
+    if (url) onUpdateElement(single.id, { url });
   }
 
   async function fixGrammar() {
-    if (!selected || selected.type !== "text") return;
+    if (!single || single.type !== "text") return;
     setBusy("ai");
     const res = await fetch("/api/ai/grammar", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: selected.text }),
+      body: JSON.stringify({ text: single.text }),
     });
     setBusy("");
     if (res.ok) {
       const { text } = await res.json();
-      onUpdateElement(selected.id, { text });
+      onUpdateElement(single.id, { text });
     }
   }
 
   async function rewrite(instruction: string) {
-    if (!selected || selected.type !== "text" || !instruction.trim()) return;
+    if (!single || single.type !== "text" || !instruction.trim()) return;
     setBusy("ai");
     const res = await fetch("/api/ai/rewrite", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: selected.text, instruction }),
+      body: JSON.stringify({ text: single.text, instruction }),
     });
     setBusy("");
     if (res.ok) {
       const { text } = await res.json();
-      onUpdateElement(selected.id, { text });
+      onUpdateElement(single.id, { text });
     }
   }
 
@@ -221,6 +202,7 @@ export function Inspector({
   }
 
   const bg = slide.document.background;
+  const count = selected.length;
 
   return (
     <aside className="thin-scroll w-72 shrink-0 overflow-y-auto border-l border-sigma-ink/10 bg-white">
@@ -231,7 +213,7 @@ export function Inspector({
             + Text
           </button>
           <button onClick={() => fileAdd.current?.click()} className={btn}>
-            {busy === "upload" ? "…" : "+ Image"}
+            {busy === "image" ? "Uploading…" : "+ Image"}
           </button>
           <button onClick={() => fileVideo.current?.click()} className={btn}>
             {busy === "video" ? "Uploading…" : "+ Video"}
@@ -244,10 +226,11 @@ export function Inspector({
           ref={fileAdd}
           type="file"
           accept="image/*"
+          multiple
           hidden
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) addImage(f);
+            const files = [...(e.target.files ?? [])];
+            if (files.length) addFiles(files, "image");
             e.target.value = "";
           }}
         />
@@ -257,41 +240,50 @@ export function Inspector({
           accept="video/*"
           hidden
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) addVideo(f);
+            const files = [...(e.target.files ?? [])];
+            if (files.length) addFiles(files, "video");
             e.target.value = "";
           }}
         />
       </Section>
 
       {/* element properties */}
-      {!selected && (
+      {!count && (
         <Section title="Tip">
-          <p className="text-xs leading-relaxed text-sigma-ink/55">
-            Click an element to edit it. Double-click text to type. Drag to move,
-            drag the handles to resize.
-          </p>
+          <ul className="space-y-1.5 text-xs leading-relaxed text-sigma-ink/55">
+            <li>Click an element to edit it. Double-click text (or press Enter) to type.</li>
+            <li>
+              <b>Select several:</b> Shift-click, or drag a box around them on
+              an empty spot.
+            </li>
+            <li>Drag to move — it snaps to the slide and other elements (hold Alt to stop snapping, Shift to keep it straight).</li>
+            <li>Arrow keys nudge (Shift = 10px). Right-click for more.</li>
+            <li>Drop or paste images straight onto the slide.</li>
+          </ul>
         </Section>
       )}
 
-      {selected?.type === "text" && (
+      {panelEl?.type === "text" && sameType === "text" && (
         <TextProps
-          el={selected}
+          key={single ? panelEl.id : "multi-text"}
+          el={panelEl}
+          count={count}
           busy={busy}
-          onChange={(p) => onUpdateElement(selected.id, p)}
+          onChange={patchSelected}
           onFix={fixGrammar}
           onRewrite={rewrite}
-          onDelete={() => onDeleteElement(selected.id)}
+          onDelete={removeSelected}
         />
       )}
 
-      {selected?.type === "image" && (
+      {panelEl?.type === "image" && sameType === "image" && (
         <ImageProps
-          el={selected}
+          el={panelEl}
+          count={count}
           busy={busy}
-          onChange={(p) => onUpdateElement(selected.id, p)}
+          onChange={patchSelected}
           onReplace={() => fileReplace.current?.click()}
-          onDelete={() => onDeleteElement(selected.id)}
+          onDelete={removeSelected}
         />
       )}
       <input
@@ -306,19 +298,43 @@ export function Inspector({
         }}
       />
 
-      {selected?.type === "video" && (
+      {panelEl?.type === "video" && sameType === "video" && (
         <VideoProps
-          el={selected}
-          onChange={(p) => onUpdateElement(selected.id, p)}
-          onDelete={() => onDeleteElement(selected.id)}
+          el={panelEl}
+          count={count}
+          onChange={patchSelected}
+          onDelete={removeSelected}
         />
       )}
 
-      {selected?.type === "shape" && (
+      {panelEl?.type === "shape" && sameType === "shape" && (
         <ShapeProps
-          el={selected}
-          onChange={(p) => onUpdateElement(selected.id, p)}
-          onDelete={() => onDeleteElement(selected.id)}
+          el={panelEl}
+          count={count}
+          onChange={patchSelected}
+          onDelete={removeSelected}
+        />
+      )}
+
+      {count > 0 && !sameType && (
+        <Section title="Selection">
+          <p className="mb-3 text-xs text-sigma-ink/55">
+            {count} elements selected. Drag any of them to move them all, or
+            drag a corner of the frame to resize them together.
+          </p>
+          <button onClick={actions.remove} className={deleteBtn}>
+            Delete {count} elements
+          </button>
+        </Section>
+      )}
+
+      {count > 0 && (
+        <ArrangeSection
+          selected={selected}
+          single={single}
+          actions={actions}
+          onPatchOne={(p) => single && onUpdateElement(single.id, p)}
+          onPatchAll={patchSelected}
         />
       )}
 
@@ -381,6 +397,285 @@ export function Inspector({
   );
 }
 
+// ---- arrange: align / distribute / layers / group / lock / exact geometry ----
+
+const ALIGNS: { edge: AlignEdge; label: string }[] = [
+  { edge: "left", label: "Align left" },
+  { edge: "hcenter", label: "Align centre" },
+  { edge: "right", label: "Align right" },
+  { edge: "top", label: "Align top" },
+  { edge: "vcenter", label: "Align middle" },
+  { edge: "bottom", label: "Align bottom" },
+];
+
+function AlignIcon({ edge }: { edge: AlignEdge | "dh" | "dv" }) {
+  const bar = "currentColor";
+  const shapes: Record<typeof edge, React.ReactNode> = {
+    left: (
+      <>
+        <rect x="1.5" y="1" width="1.5" height="14" />
+        <rect x="4.5" y="3" width="10" height="3.5" rx="1" />
+        <rect x="4.5" y="9.5" width="6" height="3.5" rx="1" />
+      </>
+    ),
+    hcenter: (
+      <>
+        <rect x="7.25" y="1" width="1.5" height="14" />
+        <rect x="2" y="3" width="12" height="3.5" rx="1" />
+        <rect x="4.5" y="9.5" width="7" height="3.5" rx="1" />
+      </>
+    ),
+    right: (
+      <>
+        <rect x="13" y="1" width="1.5" height="14" />
+        <rect x="1.5" y="3" width="10" height="3.5" rx="1" />
+        <rect x="5.5" y="9.5" width="6" height="3.5" rx="1" />
+      </>
+    ),
+    top: (
+      <>
+        <rect x="1" y="1.5" width="14" height="1.5" />
+        <rect x="3" y="4.5" width="3.5" height="10" rx="1" />
+        <rect x="9.5" y="4.5" width="3.5" height="6" rx="1" />
+      </>
+    ),
+    vcenter: (
+      <>
+        <rect x="1" y="7.25" width="14" height="1.5" />
+        <rect x="3" y="2" width="3.5" height="12" rx="1" />
+        <rect x="9.5" y="4.5" width="3.5" height="7" rx="1" />
+      </>
+    ),
+    bottom: (
+      <>
+        <rect x="1" y="13" width="14" height="1.5" />
+        <rect x="3" y="1.5" width="3.5" height="10" rx="1" />
+        <rect x="9.5" y="5.5" width="3.5" height="6" rx="1" />
+      </>
+    ),
+    dh: (
+      <>
+        <rect x="1" y="3" width="3" height="10" rx="1" />
+        <rect x="6.5" y="5" width="3" height="6" rx="1" />
+        <rect x="12" y="3" width="3" height="10" rx="1" />
+      </>
+    ),
+    dv: (
+      <>
+        <rect x="3" y="1" width="10" height="3" rx="1" />
+        <rect x="5" y="6.5" width="6" height="3" rx="1" />
+        <rect x="3" y="12" width="10" height="3" rx="1" />
+      </>
+    ),
+  };
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill={bar} aria-hidden>
+      {shapes[edge]}
+    </svg>
+  );
+}
+
+function NumField({
+  label,
+  value,
+  onChange,
+  min,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+}) {
+  // keep the raw text while typing so "-" or "" don't get snapped back
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <label className="flex items-center gap-1.5 rounded-lg border border-sigma-ink/15 px-2 py-1 focus-within:ring-2 focus-within:ring-sigma-orange/40">
+      <span className="text-[10px] font-bold uppercase text-sigma-ink/40">
+        {label}
+      </span>
+      <input
+        inputMode="numeric"
+        value={draft ?? String(Math.round(value))}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          const n = Number(e.target.value);
+          if (e.target.value.trim() !== "" && Number.isFinite(n))
+            onChange(Math.round(min !== undefined ? Math.max(min, n) : n));
+        }}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+        className="w-full min-w-0 bg-transparent text-sm outline-none"
+      />
+    </label>
+  );
+}
+
+const ANIMS: { value: NonNullable<SlideElement["anim"]>; label: string }[] = [
+  { value: "up", label: "Rise up" },
+  { value: "fade", label: "Fade in" },
+  { value: "left", label: "Slide from left" },
+  { value: "right", label: "Slide from right" },
+  { value: "pop", label: "Pop" },
+  { value: "none", label: "No animation" },
+];
+
+function ArrangeSection({
+  selected,
+  single,
+  actions,
+  onPatchOne,
+  onPatchAll,
+}: {
+  selected: SlideElement[];
+  single: SlideElement | null;
+  actions: EditorActions;
+  onPatchOne: (p: ElementPatch) => void;
+  onPatchAll: (p: ElementPatch) => void;
+}) {
+  const units = selectionUnits(selected).length;
+  const grouped = selected.some((e) => e.groupId);
+  const allLocked = selected.every((e) => e.locked);
+  const anims = new Set(selected.map((e) => e.anim ?? "up"));
+  const anim = anims.size === 1 ? [...anims][0] : "";
+
+  return (
+    <Section title="Arrange">
+      <label className="mb-1 block text-xs text-sigma-ink/50">
+        Align {units > 1 ? "to each other" : "on the slide"}
+      </label>
+      <div className="mb-3 grid grid-cols-6 gap-1">
+        {ALIGNS.map((a) => (
+          <button
+            key={a.edge}
+            title={a.label}
+            aria-label={a.label}
+            onClick={() => actions.align(a.edge)}
+            className={`${btn} grid place-items-center px-0`}
+          >
+            <AlignIcon edge={a.edge} />
+          </button>
+        ))}
+      </div>
+
+      {units >= 3 && (
+        <>
+          <label className="mb-1 block text-xs text-sigma-ink/50">
+            Space evenly
+          </label>
+          <div className="mb-3 grid grid-cols-2 gap-1.5">
+            <button
+              onClick={() => actions.distribute("h")}
+              className={`${btn} flex items-center justify-center gap-1.5`}
+            >
+              <AlignIcon edge="dh" /> Horizontally
+            </button>
+            <button
+              onClick={() => actions.distribute("v")}
+              className={`${btn} flex items-center justify-center gap-1.5`}
+            >
+              <AlignIcon edge="dv" /> Vertically
+            </button>
+          </div>
+        </>
+      )}
+
+      <label className="mb-1 block text-xs text-sigma-ink/50">Layer</label>
+      <div className="mb-3 grid grid-cols-2 gap-1.5">
+        <button onClick={() => actions.layer("front")} className={btn} title="Ctrl+Shift+]">
+          ⇈ To front
+        </button>
+        <button onClick={() => actions.layer("forward")} className={btn} title="Ctrl+]">
+          ↑ Forward
+        </button>
+        <button onClick={() => actions.layer("backward")} className={btn} title="Ctrl+[">
+          ↓ Backward
+        </button>
+        <button onClick={() => actions.layer("back")} className={btn} title="Ctrl+Shift+[">
+          ⇊ To back
+        </button>
+      </div>
+
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {selected.length > 1 && units > 1 && (
+          <button onClick={actions.group} className={btn} title="Ctrl+G">
+            Group
+          </button>
+        )}
+        {grouped && (
+          <button onClick={actions.ungroup} className={btn} title="Ctrl+Shift+G">
+            Ungroup
+          </button>
+        )}
+        <button
+          onClick={actions.toggleLock}
+          className={allLocked ? btnActive : btn}
+          title="Locked elements can't be moved by accident"
+        >
+          {allLocked ? "🔒 Locked" : "🔓 Lock"}
+        </button>
+        <button onClick={actions.duplicate} className={btn} title="Ctrl+D">
+          Duplicate
+        </button>
+      </div>
+
+      {single && (
+        <>
+          <label className="mb-1 block text-xs text-sigma-ink/50">
+            Position &amp; size
+          </label>
+          <div className="mb-3 grid grid-cols-2 gap-1.5">
+            <NumField label="X" value={single.x} onChange={(x) => onPatchOne({ x })} />
+            <NumField label="Y" value={single.y} onChange={(y) => onPatchOne({ y })} />
+            <NumField
+              label="W"
+              value={single.w}
+              min={8}
+              onChange={(w) => onPatchOne({ w })}
+            />
+            {single.type !== "text" ? (
+              <NumField
+                label="H"
+                value={single.h}
+                min={4}
+                onChange={(h) => onPatchOne({ h })}
+              />
+            ) : (
+              <span />
+            )}
+            <NumField
+              label="↻°"
+              value={single.rotation ?? 0}
+              onChange={(r) => onPatchOne({ rotation: ((r % 360) + 360) % 360 })}
+            />
+          </div>
+        </>
+      )}
+
+      <label className="mb-1 block text-xs text-sigma-ink/50">
+        Entrance animation
+      </label>
+      <select
+        value={anim}
+        onChange={(e) =>
+          onPatchAll({ anim: e.target.value as SlideElement["anim"] })
+        }
+        className="w-full rounded-lg border border-sigma-ink/15 bg-white px-2 py-1.5 text-sm"
+      >
+        {!anim && <option value="">Mixed</option>}
+        {ANIMS.map((a) => (
+          <option key={a.value} value={a.value}>
+            {a.label}
+          </option>
+        ))}
+      </select>
+    </Section>
+  );
+}
+
+// ---- per-type panels ------------------------------------------------------
+
 const AI_PRESETS: { label: string; instruction: string }[] = [
   { label: "Improve", instruction: "Improve clarity and flow without changing the meaning." },
   { label: "Shorten", instruction: "Make it more concise and punchy." },
@@ -389,8 +684,13 @@ const AI_PRESETS: { label: string; instruction: string }[] = [
   { label: "Friendlier", instruction: "Rewrite in a warmer, friendlier tone." },
 ];
 
+function deleteLabel(count: number) {
+  return count > 1 ? `Delete ${count} elements` : "Delete element";
+}
+
 function TextProps({
   el,
+  count,
   busy,
   onChange,
   onFix,
@@ -398,6 +698,7 @@ function TextProps({
   onDelete,
 }: {
   el: TextElement;
+  count: number;
   busy: string;
   onChange: (p: Partial<TextElement>) => void;
   onFix: () => void;
@@ -407,58 +708,60 @@ function TextProps({
   const [prompt, setPrompt] = useState("");
   const aiBusy = busy === "ai";
   return (
-    <Section title="Text">
-      {/* AI assist */}
-      <div className="mb-3 rounded-xl border border-sigma-orange/30 bg-sigma-orange/5 p-2.5">
-        <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-sigma-orange">
-          ✨ AI assist
-        </div>
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          <button
-            onClick={onFix}
-            disabled={aiBusy}
-            className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-sigma-ink shadow-sm transition hover:bg-sigma-sand disabled:opacity-60"
-          >
-            Fix grammar
-          </button>
-          {AI_PRESETS.map((p) => (
+    <Section title={count > 1 ? `Text · ${count} selected` : "Text"}>
+      {/* AI assist (single text box only) */}
+      {count === 1 && (
+        <div className="mb-3 rounded-xl border border-sigma-orange/30 bg-sigma-orange/5 p-2.5">
+          <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-sigma-orange">
+            ✨ AI assist
+          </div>
+          <div className="mb-2 flex flex-wrap gap-1.5">
             <button
-              key={p.label}
-              onClick={() => onRewrite(p.instruction)}
+              onClick={onFix}
               disabled={aiBusy}
               className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-sigma-ink shadow-sm transition hover:bg-sigma-sand disabled:opacity-60"
             >
-              {p.label}
+              Fix grammar
             </button>
-          ))}
+            {AI_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                onClick={() => onRewrite(p.instruction)}
+                disabled={aiBusy}
+                className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-sigma-ink shadow-sm transition hover:bg-sigma-sand disabled:opacity-60"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1.5">
+            <input
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && prompt.trim()) {
+                  onRewrite(prompt);
+                  setPrompt("");
+                }
+              }}
+              placeholder="Tell AI what to do…"
+              className="min-w-0 flex-1 rounded-lg border border-sigma-ink/15 bg-white px-2 py-1.5 text-xs outline-none ring-sigma-orange/40 focus:ring-2"
+            />
+            <button
+              onClick={() => {
+                if (prompt.trim()) {
+                  onRewrite(prompt);
+                  setPrompt("");
+                }
+              }}
+              disabled={aiBusy || !prompt.trim()}
+              className="sigma-gradient rounded-lg px-3 py-1.5 text-xs font-bold text-white shadow-card transition hover:brightness-105 disabled:opacity-50"
+            >
+              {aiBusy ? "…" : "Go"}
+            </button>
+          </div>
         </div>
-        <div className="flex gap-1.5">
-          <input
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && prompt.trim()) {
-                onRewrite(prompt);
-                setPrompt("");
-              }
-            }}
-            placeholder="Tell AI what to do…"
-            className="min-w-0 flex-1 rounded-lg border border-sigma-ink/15 bg-white px-2 py-1.5 text-xs outline-none ring-sigma-orange/40 focus:ring-2"
-          />
-          <button
-            onClick={() => {
-              if (prompt.trim()) {
-                onRewrite(prompt);
-                setPrompt("");
-              }
-            }}
-            disabled={aiBusy || !prompt.trim()}
-            className="sigma-gradient rounded-lg px-3 py-1.5 text-xs font-bold text-white shadow-card transition hover:brightness-105 disabled:opacity-50"
-          >
-            {aiBusy ? "…" : "Go"}
-          </button>
-        </div>
-      </div>
+      )}
 
       <label className="mb-1 block text-xs text-sigma-ink/50">Font</label>
       <select
@@ -476,14 +779,30 @@ function TextProps({
       <div className="mb-3 flex gap-2">
         <div className="flex-1">
           <label className="mb-1 block text-xs text-sigma-ink/50">Size</label>
-          <input
-            type="number"
-            value={el.fontSize}
-            onChange={(e) => onChange({ fontSize: Number(e.target.value) || 1 })}
-            className="w-full rounded-lg border border-sigma-ink/15 px-2 py-1.5 text-sm"
-          />
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => onChange({ fontSize: Math.max(6, el.fontSize - 2) })}
+              className={`${btn} px-2`}
+              title="Smaller"
+            >
+              −
+            </button>
+            <input
+              type="number"
+              value={el.fontSize}
+              onChange={(e) => onChange({ fontSize: Number(e.target.value) || 1 })}
+              className="w-full min-w-0 rounded-lg border border-sigma-ink/15 px-2 py-1.5 text-sm"
+            />
+            <button
+              onClick={() => onChange({ fontSize: el.fontSize + 2 })}
+              className={`${btn} px-2`}
+              title="Bigger"
+            >
+              +
+            </button>
+          </div>
         </div>
-        <div className="flex-1">
+        <div className="w-[76px]">
           <label className="mb-1 block text-xs text-sigma-ink/50">Weight</label>
           <select
             value={el.fontWeight}
@@ -499,17 +818,32 @@ function TextProps({
         </div>
       </div>
 
-      <label className="mb-1 block text-xs text-sigma-ink/50">Align</label>
-      <div className="mb-3 flex gap-2">
+      <label className="mb-1 block text-xs text-sigma-ink/50">Style</label>
+      <div className="mb-3 flex flex-wrap gap-1.5">
         {(["left", "center", "right"] as const).map((a) => (
           <button
             key={a}
             onClick={() => onChange({ align: a })}
             className={el.align === a ? btnActive : btn}
+            title={`Align text ${a}`}
           >
             {a === "left" ? "⯇" : a === "center" ? "≡" : "⯈"}
           </button>
         ))}
+        <button
+          onClick={() => onChange({ fontWeight: el.fontWeight >= 700 ? 400 : 700 })}
+          className={el.fontWeight >= 700 ? btnActive : btn}
+          title="Bold"
+        >
+          <b>B</b>
+        </button>
+        <button
+          onClick={() => onChange({ italic: !el.italic })}
+          className={el.italic ? btnActive : btn}
+          title="Italic"
+        >
+          <i>I</i>
+        </button>
         <button
           onClick={() => onChange({ uppercase: !el.uppercase })}
           className={el.uppercase ? btnActive : btn}
@@ -519,16 +853,39 @@ function TextProps({
         </button>
       </div>
 
+      <label className="mb-1 block text-xs text-sigma-ink/50">
+        Line spacing: {(el.lineHeight ?? 1.3).toFixed(2)}
+      </label>
+      <input
+        type="range"
+        min={80}
+        max={220}
+        value={Math.round((el.lineHeight ?? 1.3) * 100)}
+        onChange={(e) => onChange({ lineHeight: Number(e.target.value) / 100 })}
+        className="mb-2 w-full accent-sigma-orange"
+      />
+      <label className="mb-1 block text-xs text-sigma-ink/50">
+        Letter spacing: {el.letterSpacing ?? 0}
+      </label>
+      <input
+        type="range"
+        min={-3}
+        max={20}
+        step={0.5}
+        value={el.letterSpacing ?? 0}
+        onChange={(e) =>
+          onChange({ letterSpacing: Number(e.target.value) || undefined })
+        }
+        className="mb-3 w-full accent-sigma-orange"
+      />
+
       <label className="mb-1 block text-xs text-sigma-ink/50">Colour</label>
       <div className="mb-3">
         <ColorRow value={el.color} onChange={(c) => onChange({ color: c })} />
       </div>
 
-      <button
-        onClick={onDelete}
-        className="w-full rounded-lg border border-sigma-red/30 py-1.5 text-xs font-semibold text-sigma-red transition hover:bg-sigma-red/5"
-      >
-        Delete element
+      <button onClick={onDelete} className={deleteBtn}>
+        {deleteLabel(count)}
       </button>
     </Section>
   );
@@ -536,22 +893,26 @@ function TextProps({
 
 function ImageProps({
   el,
+  count,
   busy,
   onChange,
   onReplace,
   onDelete,
 }: {
   el: ImageElement;
+  count: number;
   busy: string;
   onChange: (p: Partial<ImageElement>) => void;
   onReplace: () => void;
   onDelete: () => void;
 }) {
   return (
-    <Section title="Image">
-      <button onClick={onReplace} className={`${btn} mb-3 w-full`}>
-        {busy === "upload" ? "Uploading…" : "Replace image"}
-      </button>
+    <Section title={count > 1 ? `Image · ${count} selected` : "Image"}>
+      {count === 1 && (
+        <button onClick={onReplace} className={`${btn} mb-3 w-full`}>
+          {busy === "upload" ? "Uploading…" : "Replace image"}
+        </button>
+      )}
 
       <div className="mb-3 flex gap-2">
         <button
@@ -587,11 +948,8 @@ function ImageProps({
         className="mb-3 w-full accent-sigma-orange"
       />
 
-      <button
-        onClick={onDelete}
-        className="w-full rounded-lg border border-sigma-red/30 py-1.5 text-xs font-semibold text-sigma-red transition hover:bg-sigma-red/5"
-      >
-        Delete element
+      <button onClick={onDelete} className={deleteBtn}>
+        {deleteLabel(count)}
       </button>
     </Section>
   );
@@ -599,15 +957,17 @@ function ImageProps({
 
 function VideoProps({
   el,
+  count,
   onChange,
   onDelete,
 }: {
   el: VideoElement;
+  count: number;
   onChange: (p: Partial<VideoElement>) => void;
   onDelete: () => void;
 }) {
   return (
-    <Section title="Video">
+    <Section title={count > 1 ? `Video · ${count} selected` : "Video"}>
       <div className="mb-3 flex flex-wrap gap-2">
         <button
           onClick={() => onChange({ autoplay: !(el.autoplay ?? true) })}
@@ -653,11 +1013,8 @@ function VideoProps({
         className="mb-3 w-full accent-sigma-orange"
       />
 
-      <button
-        onClick={onDelete}
-        className="w-full rounded-lg border border-sigma-red/30 py-1.5 text-xs font-semibold text-sigma-red transition hover:bg-sigma-red/5"
-      >
-        Delete element
+      <button onClick={onDelete} className={deleteBtn}>
+        {deleteLabel(count)}
       </button>
     </Section>
   );
@@ -665,15 +1022,17 @@ function VideoProps({
 
 function ShapeProps({
   el,
+  count,
   onChange,
   onDelete,
 }: {
   el: ShapeElement;
+  count: number;
   onChange: (p: Partial<ShapeElement>) => void;
   onDelete: () => void;
 }) {
   return (
-    <Section title="Shape">
+    <Section title={count > 1 ? `Shape · ${count} selected` : "Shape"}>
       <label className="mb-1 block text-xs text-sigma-ink/50">Type</label>
       <div className="mb-3 flex gap-2">
         {(["rect", "triangle", "line", "blob"] as const).map((k) => (
@@ -692,6 +1051,22 @@ function ShapeProps({
         <ColorRow value={el.fill} onChange={(c) => onChange({ fill: c })} />
       </div>
 
+      {el.kind !== "triangle" && el.kind !== "blob" && (
+        <>
+          <label className="mb-1 block text-xs text-sigma-ink/50">
+            Corner radius: {el.radius ?? 0}
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={120}
+            value={el.radius ?? 0}
+            onChange={(e) => onChange({ radius: Number(e.target.value) })}
+            className="mb-3 w-full accent-sigma-orange"
+          />
+        </>
+      )}
+
       <label className="mb-1 block text-xs text-sigma-ink/50">
         Opacity: {Math.round((el.opacity ?? 1) * 100)}%
       </label>
@@ -704,11 +1079,8 @@ function ShapeProps({
         className="mb-3 w-full accent-sigma-orange"
       />
 
-      <button
-        onClick={onDelete}
-        className="w-full rounded-lg border border-sigma-red/30 py-1.5 text-xs font-semibold text-sigma-red transition hover:bg-sigma-red/5"
-      >
-        Delete element
+      <button onClick={onDelete} className={deleteBtn}>
+        {deleteLabel(count)}
       </button>
     </Section>
   );

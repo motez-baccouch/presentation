@@ -257,8 +257,8 @@ export async function aiSummarize(
           role: "system",
           content: `You build a weekly status board for the "Sigma Lending" dev team.
 For EACH task across all people, output one item: {"personKey": string, "label": string, "status": string}.
-- "status" must be EXACTLY one of: "In Progress", "In Review", "Released". Infer it from wording (delivered/production/merged → Released; in review/addressing review/ready/PR → In Review; otherwise → In Progress).
-- "label" is a very short 3-7 word summary of the task in title case, keeping product names (Plaid, Creditsafe, VRP, Open Banking, Postcoder). No trailing period.
+- "status" must be EXACTLY one of: "In Progress", "In Review", "Released". A leading "Delivered:", "In review:" or "In progress:" tag on a task is authoritative (Delivered → Released). Otherwise infer it from wording (delivered/production/merged → Released; in review/addressing review/ready/PR → In Review; otherwise → In Progress).
+- "label" is a very short 3-7 word summary of the task in title case, keeping product names (Plaid, Creditsafe, VRP, Open Banking, Postcoder). No trailing period, and never include the status tag.
 - "personKey" must be copied EXACTLY from the input.
 Return STRICT JSON: {"items": [...]}. Include every task.`,
         },
@@ -277,7 +277,10 @@ Return STRICT JSON: {"items": [...]}. Include every task.`,
       .filter((it) => it.personKey && keys.has(it.personKey) && it.label)
       .map((it) => ({
         personKey: it.personKey as string,
-        label: String(it.label),
+        label: String(it.label).replace(
+          /^(delivered|released|in review|in progress)\s*[:\-–—]\s*/i,
+          "",
+        ),
         status: (STATUSES.includes(it.status as SummaryStatus)
           ? it.status
           : "In Progress") as SummaryStatus,

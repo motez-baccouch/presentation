@@ -9,6 +9,8 @@ import {
   SlideDocument,
   SlideElement,
   SlideBackground,
+  STAGE_WIDTH,
+  STAGE_HEIGHT,
 } from "@/lib/types";
 import { buildBlankSlide, genId } from "@/lib/templates";
 import { SlideRail } from "./SlideRail";
@@ -17,17 +19,61 @@ import { Inspector } from "./Inspector";
 import { usePresence } from "./usePresence";
 import { NamePrompt, PresencePills } from "./Presence";
 import { useDeckVersion } from "../useDeckVersion";
+import {
+  Heights,
+  LayerMove,
+  boxOf,
+  paintOrder,
+  restack,
+  selectionUnits,
+  unionBox,
+} from "./geometry";
+import type { AlignEdge, EditorActions, ElementPatch, Patches } from "./actions";
+import { imageElementFor, uploadFile, videoElementFor } from "./media";
 
 type SaveState = "idle" | "saving" | "saved";
 
-/** Deep-clone an element with a fresh id, nudged by (dx, dy) like Canva paste. */
-function cloneElement(el: SlideElement, dx: number, dy: number): SlideElement {
-  return {
-    ...(JSON.parse(JSON.stringify(el)) as SlideElement),
-    id: genId(),
-    x: Math.round(el.x + dx),
-    y: Math.round(el.y + dy),
-  };
+// Written to the system clipboard on copy, so a later Ctrl+V knows to paste
+// our elements rather than whatever text/image was copied elsewhere.
+const CLIP_MARKER = "⁣sigma-slide-elements⁣";
+
+function isTypingTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  return (
+    !!el &&
+    (el.tagName === "INPUT" ||
+      el.tagName === "TEXTAREA" ||
+      el.tagName === "SELECT" ||
+      el.isContentEditable)
+  );
+}
+
+/** The user deliberately highlighted page text — let the native copy win. */
+function hasTextSelection(): boolean {
+  const sel = window.getSelection();
+  return !!sel && !sel.isCollapsed && !!sel.toString().trim();
+}
+
+/** Deep-clone elements with fresh ids (and fresh group ids), nudged by (dx, dy). */
+function cloneElements(
+  els: SlideElement[],
+  dx: number,
+  dy: number,
+): SlideElement[] {
+  const groups = new Map<string, string>();
+  return els.map((el) => {
+    const copy: SlideElement = {
+      ...(JSON.parse(JSON.stringify(el)) as SlideElement),
+      id: genId(),
+      x: Math.round(el.x + dx),
+      y: Math.round(el.y + dy),
+    };
+    if (el.groupId) {
+      if (!groups.has(el.groupId)) groups.set(el.groupId, genId());
+      copy.groupId = groups.get(el.groupId);
+    }
+    return copy;
+  });
 }
 
 export function Editor({
@@ -47,6 +93,7 @@ export function Editor({
   });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [uploading, setUploading] = useState(0);
 
   const slidesRef = useRef(slides);
   slidesRef.current = slides;
@@ -54,6 +101,8 @@ export function Editor({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshKnownRef = useRef<() => Promise<void>>(async () => {});
   const [deckChanged, setDeckChanged] = useState(false);
+  // rendered text-box heights, measured by the canvas (align / layering need them)
+  const heightsRef = useRef<Heights>({});
 
   // ---- undo / redo history -----------------------------------------------
   // Snapshots are whole `slides` arrays. All mutations are immutable (new
@@ -70,7 +119,11 @@ export function Editor({
 
   // Canva-style element clipboard (in-memory; persists across slides).
   const clipboard = useRef<SlideElement[] | null>(null);
+  const clipSlideId = useRef<string | null>(null);
   const pasteCount = useRef(0);
+  const [hasClip, setHasClip] = useState(false);
+  // set when a real copy/cut/paste event handled the shortcut
+  const clipEventFired = useRef(false);
 
   const syncHist = useCallback(() => {
     setCanUndo(past.current.length > 0);
@@ -84,35 +137,35 @@ export function Editor({
     syncHist();
   }, [syncHist]);
 
-  // Capture the pre-edit state, coalescing bursts (e.g. a drag) into one step.
-  const pushHistory = useCallback(() => {
-    const now = Date.now();
-    if (now - lastEditAt.current > COALESCE_MS) {
-      past.current.push(slidesRef.current);
-      if (past.current.length > HISTORY_LIMIT) past.current.shift();
-      future.current = [];
-      syncHist();
-    }
-    lastEditAt.current = now;
-  }, [syncHist]);
+  // Capture the pre-edit state. Bursts (typing, sliders, arrow nudges) coalesce
+  // into one step; finished gestures and commands always get their own step.
+  const pushHistory = useCallback(
+    (coalesce: boolean) => {
+      const now = Date.now();
+      if (!coalesce || now - lastEditAt.current > COALESCE_MS) {
+        past.current.push(slidesRef.current);
+        if (past.current.length > HISTORY_LIMIT) past.current.shift();
+        future.current = [];
+        syncHist();
+      }
+      lastEditAt.current = coalesce ? now : 0;
+    },
+    [syncHist],
+  );
 
   const current = slides[Math.min(index, slides.length - 1)];
+  const selectedEls = useMemo(
+    () =>
+      (current?.document.elements ?? []).filter((e) =>
+        selectedIds.includes(e.id),
+      ),
+    [current, selectedIds],
+  );
   // the "primary" element (last one added to the selection) drives the Inspector
-  const selected = useMemo(() => {
+  const primary = useMemo(() => {
     const id = selectedIds[selectedIds.length - 1];
     return current?.document.elements.find((e) => e.id === id) ?? null;
   }, [current, selectedIds]);
-
-  // click selection: plain click selects one (keeps a group if already in it);
-  // Ctrl/Cmd/Shift+click toggles an element in/out of a multi-selection.
-  const select = useCallback((id: string | null, additive = false) => {
-    setSelectedIds((prev) => {
-      if (!id) return [];
-      if (additive)
-        return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      return prev.includes(id) ? prev : [id];
-    });
-  }, []);
 
   const presence = usePresence(current?.id ?? null);
   const presenceBySlide = useMemo(() => {
@@ -195,8 +248,12 @@ export function Editor({
 
   // ---- document mutations -------------------------------------------------
   const mutateDoc = useCallback(
-    (slideId: string, updater: (doc: SlideDocument) => SlideDocument) => {
-      pushHistory();
+    (
+      slideId: string,
+      updater: (doc: SlideDocument) => SlideDocument,
+      coalesce = true,
+    ) => {
+      pushHistory(coalesce);
       setSlides((prev) =>
         prev.map((s) =>
           s.id === slideId ? { ...s, document: updater(s.document) } : s,
@@ -239,52 +296,74 @@ export function Editor({
     syncHist();
   }, [applyHistory, syncHist]);
 
+  // patch several elements at once (one history step unless coalescing)
+  const patchElements = useCallback(
+    (patches: Patches, coalesce = true) => {
+      if (!current || !Object.keys(patches).length) return;
+      mutateDoc(
+        current.id,
+        (doc) => ({
+          ...doc,
+          elements: doc.elements.map((e) =>
+            patches[e.id] ? ({ ...e, ...patches[e.id] } as SlideElement) : e,
+          ),
+        }),
+        coalesce,
+      );
+    },
+    [current, mutateDoc],
+  );
+
   const updateElement = useCallback(
-    (elId: string, patch: Partial<SlideElement>) => {
-      if (!current) return;
-      mutateDoc(current.id, (doc) => ({
-        ...doc,
-        elements: doc.elements.map((e) =>
-          e.id === elId ? ({ ...e, ...patch } as SlideElement) : e,
-        ),
-      }));
-    },
-    [current, mutateDoc],
+    (elId: string, patch: ElementPatch) => patchElements({ [elId]: patch }),
+    [patchElements],
   );
 
-  const addElement = useCallback(
-    (el: SlideElement) => {
-      if (!current) return;
-      mutateDoc(current.id, (doc) => ({
-        ...doc,
-        elements: [...doc.elements, el],
-      }));
-      setSelectedIds([el.id]);
-    },
-    [current, mutateDoc],
+  // a finished drag / resize / rotate / align is always its own undo step
+  const commitPatches = useCallback(
+    (patches: Patches) => patchElements(patches, false),
+    [patchElements],
   );
 
-  // add several elements at once (group paste / duplicate) and select them all
+  // add elements and select them; `onTop` stacks them above everything
   const addElements = useCallback(
-    (els: SlideElement[]) => {
+    (els: SlideElement[], onTop = false) => {
       if (!current || !els.length) return;
-      mutateDoc(current.id, (doc) => ({
-        ...doc,
-        elements: [...doc.elements, ...els],
-      }));
+      mutateDoc(
+        current.id,
+        (doc) => {
+          let added = els;
+          if (onTop) {
+            const top = Math.max(0, ...doc.elements.map((e) => e.z ?? 1));
+            const rank = new Map(paintOrder(els).map((e, i) => [e.id, i]));
+            added = els.map((e) => ({ ...e, z: top + 1 + rank.get(e.id)! }));
+          }
+          return { ...doc, elements: [...doc.elements, ...added] };
+        },
+        false,
+      );
       setSelectedIds(els.map((e) => e.id));
     },
     [current, mutateDoc],
   );
 
+  const addElement = useCallback(
+    (el: SlideElement) => addElements([el]),
+    [addElements],
+  );
+
   const deleteElement = useCallback(
     (elId: string) => {
       if (!current) return;
-      mutateDoc(current.id, (doc) => ({
-        ...doc,
-        elements: doc.elements.filter((e) => e.id !== elId),
-      }));
-      setSelectedIds([]);
+      mutateDoc(
+        current.id,
+        (doc) => ({
+          ...doc,
+          elements: doc.elements.filter((e) => e.id !== elId),
+        }),
+        false,
+      );
+      setSelectedIds((prev) => prev.filter((x) => x !== elId));
     },
     [current, mutateDoc],
   );
@@ -293,28 +372,27 @@ export function Editor({
   const deleteSelected = useCallback(() => {
     if (!current || !selectedIds.length) return;
     const ids = new Set(selectedIds);
-    mutateDoc(current.id, (doc) => ({
-      ...doc,
-      elements: doc.elements.filter((e) => !ids.has(e.id)),
-    }));
+    mutateDoc(
+      current.id,
+      (doc) => ({
+        ...doc,
+        elements: doc.elements.filter((e) => !ids.has(e.id)),
+      }),
+      false,
+    );
     setSelectedIds([]);
   }, [current, mutateDoc, selectedIds]);
 
-  // move all selected elements by the same delta (group drag)
+  // arrow-key nudge (coalesces while the key is held)
   const nudgeSelected = useCallback(
     (dx: number, dy: number) => {
-      if (!current || !selectedIds.length) return;
-      const ids = new Set(selectedIds);
-      mutateDoc(current.id, (doc) => ({
-        ...doc,
-        elements: doc.elements.map((e) =>
-          ids.has(e.id)
-            ? { ...e, x: Math.round(e.x + dx), y: Math.round(e.y + dy) }
-            : e,
-        ),
-      }));
+      const patches: Patches = {};
+      for (const e of selectedEls) {
+        if (!e.locked) patches[e.id] = { x: e.x + dx, y: e.y + dy };
+      }
+      patchElements(patches);
     },
-    [current, mutateDoc, selectedIds],
+    [patchElements, selectedEls],
   );
 
   const setBackground = useCallback(
@@ -325,24 +403,244 @@ export function Editor({
     [current, mutateDoc],
   );
 
-  // keyboard: undo/redo, Delete, + Canva-style copy / cut / paste / duplicate
+  // upload dropped / pasted / picked files and drop them onto the slide
+  const addFiles = useCallback(
+    async (files: File[], at?: { x: number; y: number }) => {
+      if (!files.length) return;
+      setUploading((n) => n + 1);
+      try {
+        const els: SlideElement[] = [];
+        for (const [i, file] of files.entries()) {
+          const url = await uploadFile(file);
+          if (!url) continue;
+          const p = at ? { x: at.x + i * 24, y: at.y + i * 24 } : undefined;
+          els.push(
+            file.type.startsWith("video/")
+              ? videoElementFor(url, p)
+              : await imageElementFor(url, p),
+          );
+        }
+        addElements(els, true);
+      } finally {
+        setUploading((n) => n - 1);
+      }
+    },
+    [addElements],
+  );
+
+  const addPastedText = useCallback(
+    (text: string) => {
+      addElements(
+        [
+          {
+            id: genId(),
+            type: "text",
+            text,
+            role: "body",
+            x: 340,
+            y: 300,
+            w: 600,
+            fontFamily: "var(--font-sans)",
+            fontSize: 28,
+            fontWeight: 500,
+            color: "#1c1407",
+            align: "left",
+            lineHeight: 1.3,
+            anim: "up",
+            z: 8,
+          },
+        ],
+        true,
+      );
+    },
+    [addElements],
+  );
+
+  // ---- selection commands (shortcuts, right-click menu, Inspector) ---------
+  const copySelection = useCallback((): boolean => {
+    if (!selectedEls.length || !current) return false;
+    clipboard.current = JSON.parse(JSON.stringify(selectedEls));
+    clipSlideId.current = current.id;
+    pasteCount.current = 0;
+    setHasClip(true);
+    return true;
+  }, [current, selectedEls]);
+
+  const pasteClipboard = useCallback(() => {
+    const clip = clipboard.current;
+    if (!clip?.length || !current) return;
+    // same slide: cascade each paste; another slide: first paste lands in place
+    const n = ++pasteCount.current - (clipSlideId.current === current.id ? 0 : 1);
+    addElements(cloneElements(clip, 24 * n, 24 * n), true);
+  }, [addElements, current]);
+
+  const duplicate = useCallback(() => {
+    if (selectedEls.length) addElements(cloneElements(selectedEls, 24, 24), true);
+  }, [addElements, selectedEls]);
+
+  const selectAll = useCallback(() => {
+    setSelectedIds(current?.document.elements.map((e) => e.id) ?? []);
+  }, [current]);
+
+  const group = useCallback(() => {
+    if (selectedEls.length < 2) return;
+    const gid = genId();
+    commitPatches(
+      Object.fromEntries(selectedEls.map((e) => [e.id, { groupId: gid }])),
+    );
+  }, [commitPatches, selectedEls]);
+
+  const ungroup = useCallback(() => {
+    commitPatches(
+      Object.fromEntries(
+        selectedEls
+          .filter((e) => e.groupId)
+          .map((e) => [e.id, { groupId: undefined }]),
+      ),
+    );
+  }, [commitPatches, selectedEls]);
+
+  const toggleLock = useCallback(() => {
+    const lock = selectedEls.some((e) => !e.locked);
+    commitPatches(
+      Object.fromEntries(
+        selectedEls.map((e) => [e.id, { locked: lock ? true : undefined }]),
+      ),
+    );
+  }, [commitPatches, selectedEls]);
+
+  const layer = useCallback(
+    (move: LayerMove) => {
+      if (!current || !selectedIds.length) return;
+      const ids = new Set(selectedIds);
+      mutateDoc(
+        current.id,
+        (doc) => {
+          const z = restack(doc.elements, ids, move, heightsRef.current);
+          return {
+            ...doc,
+            elements: doc.elements.map((e) => ({ ...e, z: z[e.id] })),
+          };
+        },
+        false,
+      );
+    },
+    [current, mutateDoc, selectedIds],
+  );
+
+  // one unit (an element or a group) aligns to the slide; several align to
+  // their combined bounds
+  const align = useCallback(
+    (edge: AlignEdge) => {
+      const h = heightsRef.current;
+      const units = selectionUnits(selectedEls.filter((e) => !e.locked));
+      if (!units.length) return;
+      const ref =
+        units.length === 1
+          ? { x: 0, y: 0, w: STAGE_WIDTH, h: STAGE_HEIGHT }
+          : unionBox(selectedEls.map((e) => boxOf(e, h)))!;
+      const patches: Patches = {};
+      for (const unit of units) {
+        const b = unionBox(unit.map((e) => boxOf(e, h)))!;
+        let dx = 0;
+        let dy = 0;
+        if (edge === "left") dx = ref.x - b.x;
+        else if (edge === "hcenter") dx = ref.x + (ref.w - b.w) / 2 - b.x;
+        else if (edge === "right") dx = ref.x + ref.w - b.w - b.x;
+        else if (edge === "top") dy = ref.y - b.y;
+        else if (edge === "vcenter") dy = ref.y + (ref.h - b.h) / 2 - b.y;
+        else dy = ref.y + ref.h - b.h - b.y;
+        dx = Math.round(dx);
+        dy = Math.round(dy);
+        for (const e of unit) patches[e.id] = { x: e.x + dx, y: e.y + dy };
+      }
+      commitPatches(patches);
+    },
+    [commitPatches, selectedEls],
+  );
+
+  // equal gaps between 3+ units along one axis
+  const distribute = useCallback(
+    (axis: "h" | "v") => {
+      const h = heightsRef.current;
+      const units = selectionUnits(selectedEls.filter((e) => !e.locked));
+      if (units.length < 3) return;
+      const pos = (b: { x: number; y: number }) => (axis === "h" ? b.x : b.y);
+      const size = (b: { w: number; h: number }) => (axis === "h" ? b.w : b.h);
+      const items = units
+        .map((u) => ({ u, b: unionBox(u.map((e) => boxOf(e, h)))! }))
+        .sort(
+          (a, b) => pos(a.b) + size(a.b) / 2 - (pos(b.b) + size(b.b) / 2),
+        );
+      const first = items[0].b;
+      const last = items[items.length - 1].b;
+      const span = pos(last) + size(last) - pos(first);
+      const total = items.reduce((sum, it) => sum + size(it.b), 0);
+      const gap = (span - total) / (items.length - 1);
+      const patches: Patches = {};
+      let cursor = pos(first);
+      for (const it of items) {
+        const d = Math.round(cursor - pos(it.b));
+        for (const e of it.u)
+          patches[e.id] = axis === "h" ? { x: e.x + d } : { y: e.y + d };
+        cursor += size(it.b) + gap;
+      }
+      commitPatches(patches);
+    },
+    [commitPatches, selectedEls],
+  );
+
+  const actions: EditorActions = useMemo(
+    () => ({
+      copy: () => {
+        if (copySelection())
+          navigator.clipboard?.writeText(CLIP_MARKER).catch(() => {});
+      },
+      cut: () => {
+        if (copySelection()) {
+          navigator.clipboard?.writeText(CLIP_MARKER).catch(() => {});
+          deleteSelected();
+        }
+      },
+      paste: pasteClipboard,
+      canPaste: hasClip,
+      duplicate,
+      remove: deleteSelected,
+      selectAll,
+      group,
+      ungroup,
+      toggleLock,
+      layer,
+      align,
+      distribute,
+    }),
+    [
+      copySelection,
+      deleteSelected,
+      pasteClipboard,
+      hasClip,
+      duplicate,
+      selectAll,
+      group,
+      ungroup,
+      toggleLock,
+      layer,
+      align,
+      distribute,
+    ],
+  );
+
+  // keyboard shortcuts (Canva-style)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // let inputs / textareas / inline text editing keep their native shortcuts
-      const t = e.target as HTMLElement | null;
-      if (
-        t &&
-        (t.tagName === "INPUT" ||
-          t.tagName === "TEXTAREA" ||
-          t.isContentEditable)
-      )
-        return;
+      if (isTypingTarget(e.target)) return;
+      const mod = e.ctrlKey || e.metaKey;
 
       // Delete / Backspace (no modifier) removes the selected element(s)
       if (
         (e.key === "Delete" || e.key === "Backspace") &&
-        !e.ctrlKey &&
-        !e.metaKey &&
+        !mod &&
         !e.altKey
       ) {
         if (selectedIds.length) {
@@ -352,10 +650,23 @@ export function Editor({
         return;
       }
 
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const selectedEls = (current?.document.elements ?? []).filter((el) =>
-        selectedIds.includes(el.id),
-      );
+      // arrows nudge 1px (Shift: 10px)
+      if (!mod && e.key.startsWith("Arrow")) {
+        if (!selectedIds.length) return;
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+        const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+        nudgeSelected(dx, dy);
+        return;
+      }
+
+      if (e.key === "Escape") {
+        if (selectedIds.length) setSelectedIds([]);
+        return;
+      }
+
+      if (!mod) return;
       const k = e.key.toLowerCase();
       if (k === "z" && !e.shiftKey) {
         e.preventDefault();
@@ -363,37 +674,102 @@ export function Editor({
       } else if (k === "y" || (k === "z" && e.shiftKey)) {
         e.preventDefault();
         redo();
-      } else if (k === "c") {
-        if (selectedEls.length) {
-          clipboard.current = JSON.parse(JSON.stringify(selectedEls));
-          pasteCount.current = 0;
-          e.preventDefault();
-        }
-      } else if (k === "x") {
-        if (selectedEls.length) {
-          clipboard.current = JSON.parse(JSON.stringify(selectedEls));
-          pasteCount.current = 0;
-          deleteSelected();
-          e.preventDefault();
-        }
-      } else if (k === "v") {
-        if (clipboard.current?.length) {
-          e.preventDefault();
-          const n = ++pasteCount.current;
-          addElements(
-            clipboard.current.map((el) => cloneElement(el, 24 * n, 24 * n)),
-          );
-        }
+      } else if (k === "a") {
+        e.preventDefault();
+        selectAll();
       } else if (k === "d") {
-        if (selectedEls.length) {
+        if (selectedIds.length) {
           e.preventDefault();
-          addElements(selectedEls.map((el) => cloneElement(el, 24, 24)));
+          duplicate();
         }
+      } else if (k === "g") {
+        e.preventDefault();
+        if (e.shiftKey) ungroup();
+        else group();
+      } else if (e.code === "BracketRight") {
+        e.preventDefault();
+        layer(e.shiftKey ? "front" : "forward");
+      } else if (e.code === "BracketLeft") {
+        e.preventDefault();
+        layer(e.shiftKey ? "back" : "backward");
+      } else if (k === "c" || k === "x" || k === "v") {
+        // Normally the copy/cut/paste events below handle these. Some browsers
+        // skip those events when nothing editable is focused, so fall back.
+        if (k !== "v" && hasTextSelection()) return;
+        clipEventFired.current = false;
+        setTimeout(() => {
+          if (clipEventFired.current) return;
+          if (k === "c") copySelection();
+          else if (k === "x") {
+            if (copySelection()) deleteSelected();
+          } else pasteClipboard();
+        }, 0);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, current, selectedIds, addElements, deleteSelected]);
+  }, [
+    undo,
+    redo,
+    selectedIds,
+    deleteSelected,
+    nudgeSelected,
+    selectAll,
+    duplicate,
+    group,
+    ungroup,
+    layer,
+    copySelection,
+    pasteClipboard,
+  ]);
+
+  // clipboard: copy/cut our elements; paste ours, or images / text from outside
+  useEffect(() => {
+    const onCopy = (e: ClipboardEvent) => {
+      if (isTypingTarget(e.target) || hasTextSelection() || !copySelection())
+        return;
+      clipEventFired.current = true;
+      e.clipboardData?.setData("text/plain", CLIP_MARKER);
+      e.preventDefault();
+    };
+    const onCut = (e: ClipboardEvent) => {
+      if (isTypingTarget(e.target) || hasTextSelection() || !copySelection())
+        return;
+      clipEventFired.current = true;
+      e.clipboardData?.setData("text/plain", CLIP_MARKER);
+      e.preventDefault();
+      deleteSelected();
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      if (isTypingTarget(e.target)) return;
+      clipEventFired.current = true;
+      const data = e.clipboardData;
+      const files = data
+        ? [...data.files].filter((f) => /^(image|video)\//.test(f.type))
+        : [];
+      if (files.length) {
+        e.preventDefault();
+        addFiles(files);
+        return;
+      }
+      const text = data?.getData("text/plain") ?? "";
+      if (text === CLIP_MARKER || (!text.trim() && clipboard.current)) {
+        e.preventDefault();
+        pasteClipboard();
+      } else if (text.trim()) {
+        e.preventDefault();
+        addPastedText(text.trim());
+      }
+    };
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("cut", onCut);
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("cut", onCut);
+      document.removeEventListener("paste", onPaste);
+    };
+  }, [copySelection, deleteSelected, pasteClipboard, addFiles, addPastedText]);
 
   // ---- structural (slide-level) ops --------------------------------------
   const addSlide = useCallback(async () => {
@@ -579,7 +955,9 @@ export function Editor({
         <div className="flex items-center gap-3 text-sm">
           <PresencePills others={presence.others} />
           <span className="hidden text-sigma-ink/50 sm:inline">
-            {saveState === "saving"
+            {uploading > 0
+              ? "Uploading…"
+              : saveState === "saving"
               ? "Saving…"
               : saveState === "saved"
                 ? "All changes saved"
@@ -691,21 +1069,29 @@ export function Editor({
         />
 
         <EditorCanvas
+          key={current.id}
           slide={current}
           selectedIds={selectedIds}
           othersHere={othersHere}
-          onSelect={select}
+          heightsRef={heightsRef}
+          actions={actions}
+          onSetSelection={setSelectedIds}
           onUpdateElement={updateElement}
-          onNudgeSelected={nudgeSelected}
+          onCommitPatches={commitPatches}
           onDeleteElement={deleteElement}
+          onDropFiles={addFiles}
         />
 
         <Inspector
           slide={current}
-          selected={selected}
+          selected={selectedEls}
+          primary={primary}
+          actions={actions}
           onUpdateElement={updateElement}
+          onUpdateElements={patchElements}
           onDeleteElement={deleteElement}
           onAddElement={addElement}
+          onAddFiles={addFiles}
           onSetBackground={setBackground}
         />
       </div>
