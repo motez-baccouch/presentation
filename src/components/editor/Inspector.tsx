@@ -34,7 +34,7 @@ function Section({
   );
 }
 
-function ColorRow({
+export function ColorRow({
   value,
   onChange,
 }: {
@@ -67,7 +67,7 @@ function ColorRow({
   );
 }
 
-const btn =
+export const btn =
   "rounded-lg border border-sigma-ink/15 bg-white px-2.5 py-1.5 text-xs font-semibold text-sigma-ink transition hover:bg-sigma-sand";
 const btnActive =
   "rounded-lg border border-sigma-orange bg-sigma-orange/10 px-2.5 py-1.5 text-xs font-semibold text-sigma-orange";
@@ -399,7 +399,7 @@ export function Inspector({
 
 // ---- arrange: align / distribute / layers / group / lock / exact geometry ----
 
-const ALIGNS: { edge: AlignEdge; label: string }[] = [
+export const ALIGNS: { edge: AlignEdge; label: string }[] = [
   { edge: "left", label: "Align left" },
   { edge: "hcenter", label: "Align centre" },
   { edge: "right", label: "Align right" },
@@ -408,7 +408,7 @@ const ALIGNS: { edge: AlignEdge; label: string }[] = [
   { edge: "bottom", label: "Align bottom" },
 ];
 
-function AlignIcon({ edge }: { edge: AlignEdge | "dh" | "dv" }) {
+export function AlignIcon({ edge }: { edge: AlignEdge | "dh" | "dv" }) {
   const bar = "currentColor";
   const shapes: Record<typeof edge, React.ReactNode> = {
     left: (

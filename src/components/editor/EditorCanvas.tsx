@@ -29,6 +29,7 @@ import {
   textStyle,
 } from "../stage/elements";
 import { EditingHereBadge } from "./Presence";
+import { QuickBar } from "./QuickBar";
 import {
   Box,
   Guide,
@@ -200,6 +201,7 @@ export function EditorCanvas({
   actions,
   onSetSelection,
   onUpdateElement,
+  onUpdateElements,
   onCommitPatches,
   onDeleteElement,
   onDropFiles,
@@ -212,6 +214,8 @@ export function EditorCanvas({
   actions: EditorActions;
   onSetSelection: (ids: string[]) => void;
   onUpdateElement: (id: string, patch: ElementPatch) => void;
+  /** quick edits from the floating toolbar (bursts coalesce into one undo step) */
+  onUpdateElements: (patches: Patches) => void;
   /** commit a finished gesture (drag / resize / rotate) as one undo step */
   onCommitPatches: (patches: Patches) => void;
   onDeleteElement: (id: string) => void;
@@ -1189,6 +1193,22 @@ export function EditorCanvas({
               </div>
             )}
           </div>
+        )}
+
+        {/* floating quick-edit toolbar for the current selection */}
+        {scale > 0 && selBox && selectedView.length > 0 && !gesture && (
+          <QuickBar
+            key={selectedIds.join(",")}
+            els={selectedView}
+            box={selBox}
+            scale={scale}
+            aboveGap={
+              solo ? (solo.locked ? 40 : 52) : selectedView.length > 1 ? 20 : 16
+            }
+            actions={actions}
+            onUpdateElements={onUpdateElements}
+            onOpenMenu={(x, y) => setMenu({ x, y })}
+          />
         )}
       </div>
 

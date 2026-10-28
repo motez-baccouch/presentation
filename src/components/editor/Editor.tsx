@@ -1077,6 +1077,7 @@ export function Editor({
           actions={actions}
           onSetSelection={setSelectedIds}
           onUpdateElement={updateElement}
+          onUpdateElements={patchElements}
           onCommitPatches={commitPatches}
           onDeleteElement={deleteElement}
           onDropFiles={addFiles}
